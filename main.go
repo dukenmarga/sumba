@@ -9,25 +9,31 @@ import (
 )
 
 var (
-	n = flag.Int64("n", 100, "number of requests to perform")
-	c = flag.Int64("c", 10, "number of concurrent workers")
+	n           *int64
+	c           *int64
+	maxRequests uint64
 
-	url = "http://127.0.0.1:4000"
+	url *string
 
-	maxRequests    = uint64(*n)
 	stepConnection = int64(maxRequests / 10)
 	done           = make(chan struct{})
 )
 
+func init() {
+	n = flag.Int64("n", 100, "number of requests to perform")
+	c = flag.Int64("c", 10, "number of concurrent workers")
+	url = flag.String("url", "http://127.0.0.1", "URL string")
+}
+
 func main() {
 	flag.Parse()
-	fmt.Printf("%d requests in %d concurrent workers\n", *n, *c)
-
-	// go printConnection()
+	maxRequests = uint64(*n)
+	fmt.Printf("Test %d requests using %d workers to: %v\n", maxRequests, *c, *url)
 
 	ctx := context.Background()
 
-	ctr := NewChannelCounter(0)
+	// counter to keep track of number of requests
+	workerCounter := NewCounterChannel(0)
 
 	// Monitor each routine and wait them until desired number of requests is reached
 	workers := sync.WaitGroup{}
@@ -38,14 +44,14 @@ func main() {
 		client := &http.Client{}
 
 		// This go routine will start sending requests sequentially one after each request is completed
-		go sendRequests(ctx, client, url, i, ctr, &workers)
+		go sendRequests(ctx, client, url, i, workerCounter, &workers)
 	}
 	workers.Wait()
 }
 
 // Tell the client to send request sequentially until maxRequests is reached
 // Each client will not depend on each other and has its own request timeline.
-func sendRequests(_ctx context.Context, client *http.Client, url string, i int64, connCounter *ChannelCounter, wg *sync.WaitGroup) {
+func sendRequests(_ctx context.Context, client *http.Client, url *string, workerNumber int64, connCounter *ChannelCounter, wg *sync.WaitGroup) {
 	// done is to indicate that a request has got response
 	done := make(chan bool)
 	defer wg.Done()
@@ -65,8 +71,8 @@ func sendRequests(_ctx context.Context, client *http.Client, url string, i int64
 }
 
 // Send a http request to specified url using a specified client
-func request(client *http.Client, url string, done chan bool) {
-	req, err := http.NewRequest("GET", url, nil)
+func request(client *http.Client, url *string, done chan bool) {
+	req, err := http.NewRequest("GET", *url, nil)
 
 	if err != nil {
 		fmt.Println(err)
@@ -91,7 +97,7 @@ type ChannelCounter struct {
 }
 
 // Initialise the channel counter
-func NewChannelCounter(start uint64) *ChannelCounter {
+func NewCounterChannel(start uint64) *ChannelCounter {
 	// Number of maximum operations, e.g. calling Add or Read will be considered 1 operation
 	// Each worker that run sendRequest() will have 1 Add and 1 Read (total 2 operation), means
 	// total maximum worker is approximately 1024/2 = 512 workers
