@@ -2,10 +2,14 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"flag"
 	"fmt"
+	"log"
 	"net/http"
+	"net/http/httptrace"
 	"sync"
+	"time"
 )
 
 var (
@@ -33,7 +37,7 @@ func main() {
 	ctx := context.Background()
 
 	// counter to keep track of number of requests
-	workerCounter := NewCounterChannel(0)
+	reqCounter := NewCounterChannel(0)
 
 	// Monitor each routine and wait them until desired number of requests is reached
 	workers := sync.WaitGroup{}
@@ -41,27 +45,27 @@ func main() {
 		workers.Add(1)
 
 		// Unique http client will be used and reused for 1 routine
-		client := &http.Client{}
+		client := http.DefaultTransport
 
 		// This go routine will start sending requests sequentially one after each request is completed
-		go sendRequests(ctx, client, url, i, workerCounter, &workers)
+		go sendRequests(ctx, client, url, i, reqCounter, &workers)
 	}
 	workers.Wait()
 }
 
 // Tell the client to send request sequentially until maxRequests is reached
 // Each client will not depend on each other and has its own request timeline.
-func sendRequests(_ctx context.Context, client *http.Client, url *string, workerNumber int64, connCounter *ChannelCounter, wg *sync.WaitGroup) {
+func sendRequests(_ctx context.Context, client http.RoundTripper, url *string, workerNumber int64, reqCounter *ChannelCounter, wg *sync.WaitGroup) {
 	// done is to indicate that a request has got response
 	done := make(chan bool)
 	defer wg.Done()
 
 	for {
-		nRequests := connCounter.Read()
+		nRequests := reqCounter.Read()
 		if nRequests > maxRequests {
 			break
 		}
-		connCounter.Add(1)
+		reqCounter.Add(1)
 
 		// We can send request synchronously, but we will use go routine for further operation
 		go request(client, url, done)
@@ -70,23 +74,50 @@ func sendRequests(_ctx context.Context, client *http.Client, url *string, worker
 
 }
 
-// Send a http request to specified url using a specified client
-func request(client *http.Client, url *string, done chan bool) {
-	req, err := http.NewRequest("GET", *url, nil)
+// Send a http request to specified url using a specified client and trace
+// the request time
+func request(client http.RoundTripper, url *string, done chan bool) {
+	req, _ := http.NewRequest("GET", *url, nil)
 
-	if err != nil {
-		fmt.Println(err)
-		done <- true
-		return
+	var start, connect, dnsStart, tlsHandshake time.Time
+	var requestTime, connectTime, dnsQueryTime, tlsHandshakeTime, totalTime time.Duration
+
+	trace := &httptrace.ClientTrace{
+		// Measure DNS lookup time
+		DNSStart: func(dsi httptrace.DNSStartInfo) { dnsStart = time.Now() },
+		DNSDone: func(ddi httptrace.DNSDoneInfo) {
+			dnsQueryTime = time.Since(dnsStart)
+			fmt.Printf("DNS Query time: %v\n", dnsQueryTime)
+		},
+
+		// Measure TLS Handshake time
+		TLSHandshakeStart: func() { tlsHandshake = time.Now() },
+		TLSHandshakeDone: func(cs tls.ConnectionState, err error) {
+			tlsHandshakeTime = time.Since(tlsHandshake)
+			fmt.Printf("TLS Handshake time: %v\n", tlsHandshakeTime)
+		},
+
+		// Measure Connect time to server
+		ConnectStart: func(network, addr string) { connect = time.Now() },
+		ConnectDone: func(network, addr string, err error) {
+			connectTime = time.Since(connect)
+			fmt.Printf("Connect time: %v\n", connectTime)
+		},
+
+		// Measure time to get the first byte
+		GotFirstResponseByte: func() {
+			requestTime = time.Since(start)
+			fmt.Printf("Time from start to first byte: %v\n", requestTime)
+		},
 	}
 
-	resp, err := client.Do(req)
-	if err != nil {
-		fmt.Println(err)
-		done <- true
-		return
+	req = req.WithContext(httptrace.WithClientTrace(req.Context(), trace))
+	start = time.Now()
+	if _, err := client.RoundTrip(req); err != nil {
+		log.Println(err)
 	}
-	_ = resp
+	totalTime = time.Since(start)
+	fmt.Printf("Total time: %v\n\n", totalTime)
 
 	done <- true
 }
