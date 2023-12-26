@@ -39,6 +39,9 @@ func main() {
 	// counter to keep track of number of requests
 	reqCounter := NewCounterChannel(0)
 
+	// tracker to monitor each request
+	reqsTracker := NewRequestTracker()
+
 	// Monitor each routine and wait them until desired number of requests is reached
 	workers := sync.WaitGroup{}
 	for i := int64(0); i < *c; i++ {
@@ -48,14 +51,27 @@ func main() {
 		client := http.DefaultTransport
 
 		// This go routine will start sending requests sequentially one after each request is completed
-		go sendRequests(ctx, client, url, i, reqCounter, &workers)
+		go sendRequests(ctx, client, url, i, reqCounter, reqsTracker, &workers)
 	}
 	workers.Wait()
+
+	AverageFirstByteTime(reqsTracker)
+	AverageTotalTime(reqsTracker)
+
+	RequestPerSecond(reqsTracker, maxRequests)
+
 }
 
 // Tell the client to send request sequentially until maxRequests is reached
 // Each client will not depend on each other and has its own request timeline.
-func sendRequests(_ctx context.Context, client http.RoundTripper, url *string, workerNumber int64, reqCounter *ChannelCounter, wg *sync.WaitGroup) {
+func sendRequests(_ctx context.Context,
+	client http.RoundTripper,
+	url *string,
+	workerNumber int64,
+	reqCounter *ChannelCounter,
+	reqTracker *[]RequestTracker,
+	wg *sync.WaitGroup) {
+
 	// done is to indicate that a request has got response
 	done := make(chan bool)
 	defer wg.Done()
@@ -68,46 +84,50 @@ func sendRequests(_ctx context.Context, client http.RoundTripper, url *string, w
 		reqCounter.Add(1)
 
 		// We can send request synchronously, but we will use go routine for further operation
-		go request(client, url, done)
+		go request(client, url, reqTracker, done)
 		<-done
 	}
-
 }
 
 // Send a http request to specified url using a specified client and trace
 // the request time
-func request(client http.RoundTripper, url *string, done chan bool) {
+func request(client http.RoundTripper, url *string, reqsTracker *[]RequestTracker, done chan bool) {
 	req, _ := http.NewRequest("GET", *url, nil)
 
 	var start, connect, dnsStart, tlsHandshake time.Time
-	var requestTime, connectTime, dnsQueryTime, tlsHandshakeTime, totalTime time.Duration
+	var firstByteTime, connectTime, dnsQueryTime, tlsHandshakeTime, totalTime time.Duration
 
+	reqTrack := RequestTracker{}
 	trace := &httptrace.ClientTrace{
 		// Measure DNS lookup time
 		DNSStart: func(dsi httptrace.DNSStartInfo) { dnsStart = time.Now() },
 		DNSDone: func(ddi httptrace.DNSDoneInfo) {
 			dnsQueryTime = time.Since(dnsStart)
-			fmt.Printf("DNS Query time: %v\n", dnsQueryTime)
+			reqTrack.dnsQueryTime = float64(dnsQueryTime / time.Millisecond)
 		},
 
 		// Measure TLS Handshake time
 		TLSHandshakeStart: func() { tlsHandshake = time.Now() },
 		TLSHandshakeDone: func(cs tls.ConnectionState, err error) {
 			tlsHandshakeTime = time.Since(tlsHandshake)
-			fmt.Printf("TLS Handshake time: %v\n", tlsHandshakeTime)
+			reqTrack.tlsHandshakeTime = float64(tlsHandshakeTime / time.Millisecond)
 		},
 
 		// Measure Connect time to server
 		ConnectStart: func(network, addr string) { connect = time.Now() },
 		ConnectDone: func(network, addr string, err error) {
 			connectTime = time.Since(connect)
-			fmt.Printf("Connect time: %v\n", connectTime)
+			reqTrack.connectTime = float64(connectTime / time.Millisecond)
 		},
 
 		// Measure time to get the first byte
 		GotFirstResponseByte: func() {
-			requestTime = time.Since(start)
-			fmt.Printf("Time from start to first byte: %v\n", requestTime)
+			firstByteTime = time.Since(start)
+			reqTrack.firstByteTime = float64(firstByteTime / time.Millisecond)
+		},
+
+		GotConn: func(info httptrace.GotConnInfo) {
+			// fmt.Printf("Connection reused: %v\n", info.Reused)
 		},
 	}
 
@@ -117,7 +137,9 @@ func request(client http.RoundTripper, url *string, done chan bool) {
 		log.Println(err)
 	}
 	totalTime = time.Since(start)
-	fmt.Printf("Total time: %v\n\n", totalTime)
+	reqTrack.totalTime = float64(totalTime / time.Millisecond)
+
+	*reqsTracker = append(*reqsTracker, reqTrack)
 
 	done <- true
 }
@@ -164,4 +186,63 @@ func (c *ChannelCounter) Read() uint64 {
 		close(ret)
 	}
 	return <-ret
+}
+
+type RequestTracker struct {
+	ch               chan func()
+	dnsQueryTime     float64
+	connectTime      float64
+	tlsHandshakeTime float64
+	firstByteTime    float64
+	totalTime        float64
+}
+
+// Initialise the request tracker
+func NewRequestTracker() *[]RequestTracker {
+	req := &[]RequestTracker{}
+	return req
+}
+
+// Compute average first byte time in milliseconds
+func AverageFirstByteTime(r *[]RequestTracker) float64 {
+	sum := SumFirstByteTime(r)
+	average := sum / float64(len(*r))
+	fmt.Printf("Average first byte time\t\t%4.1f ms\n", average)
+	return average
+}
+
+// Compute average request time in milliseconds
+func AverageTotalTime(r *[]RequestTracker) float64 {
+	sum := SumTotalTime(r)
+	average := sum / float64(len(*r))
+	fmt.Printf("Average time per request\t%4.1f ms\n", average)
+	return average
+}
+
+// Sum up the first byte time for all requests from all workers in milliseconds
+func SumFirstByteTime(r *[]RequestTracker) float64 {
+	sum := 0.0
+	for _, reqTrack := range *r {
+		sum += reqTrack.firstByteTime
+	}
+	return sum
+}
+
+// Sum up the total request time for all requests from all workers in milliseconds
+func SumTotalTime(r *[]RequestTracker) float64 {
+	sum := 0.0
+	for _, reqTrack := range *r {
+		sum += reqTrack.totalTime
+	}
+	return sum
+}
+
+// Calculates server benchmark as request per second
+func RequestPerSecond(r *[]RequestTracker, maxRequests uint64) float64 {
+	sum := SumTotalTime(r)
+	// Request per second = total request / total time
+	// Total time is in milliseconds
+	rps := float64(maxRequests) / sum * 1000
+	fmt.Printf("Request per second\t\t%4.0f req/s\n", rps)
+	return rps
 }
