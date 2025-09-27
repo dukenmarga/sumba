@@ -1,5 +1,13 @@
-# sumba
+# Sumba
 Simple server benchmark tool.
+
+### Origin
+Sumba is named after the stunning island in East Nusa Tenggara, Indonesia,
+known for its pristine beaches, vibrant culture, and untamed natural beauty.
+We chose this name to reflect our app's essence: a simple, yet powerful server
+benchmark tool that delivers clear, reliable performance insights with the
+elegance and efficiency inspired by Sumba’s raw charm.
+
 
 
 ### Compile
