@@ -10,11 +10,14 @@ import (
 	"net/http/httptrace"
 	"sync"
 	"time"
+
+	"github.com/go-rod/rod"
 )
 
 var (
 	n           *int64
 	c           *int64
+	emulate     *bool
 	maxRequests uint64
 
 	url *string
@@ -28,6 +31,7 @@ var (
 func init() {
 	n = flag.Int64("n", 100, "number of requests to perform")
 	c = flag.Int64("c", 10, "number of concurrent workers")
+	emulate = flag.Bool("emulate", false, "emulate headless browser")
 	url = flag.String("url", "http://127.0.0.1", "URL string")
 }
 
@@ -51,11 +55,19 @@ func main() {
 	for i := int64(0); i < *c; i++ {
 		workers.Add(1)
 
-		// Unique http client will be used and reused for 1 routine
-		client := http.DefaultTransport
+		if *emulate {
+			// Launch headless browser
+			browser := rod.New().MustConnect()
+			defer browser.MustClose()
 
-		// This go routine will start sending requests sequentially one after each request is completed
-		go sendRequests(ctx, client, url, i, reqCounter, reqsTracker, &workers)
+			go sendRequestsHeadless(ctx, browser, url, i, reqCounter, reqsTracker, &workers)
+		} else {
+			// Unique http client will be used and reused for 1 routine
+			client := http.DefaultTransport
+			// This go routine will start sending requests sequentially one after each request is completed
+			go sendRequests(ctx, client, url, i, reqCounter, reqsTracker, &workers)
+		}
+
 	}
 	workers.Wait()
 
@@ -148,6 +160,52 @@ func request(client http.RoundTripper, url *string, reqsTracker *[]RequestTracke
 	*reqsTracker = append(*reqsTracker, reqTrack)
 
 	done <- true
+}
+
+func requestHeadless(browser *rod.Browser, url *string, reqsTracker *[]RequestTracker, done chan bool) {
+	var start time.Time
+	var totalTime time.Duration
+
+	reqTrack := RequestTracker{}
+
+	start = time.Now()
+	_ = browser.MustPage(*url).MustWaitLoad()
+	totalTime = time.Since(start)
+	reqTrack.totalTime = float64(totalTime / time.Millisecond)
+
+	mu.Lock()
+	defer mu.Unlock()
+	*reqsTracker = append(*reqsTracker, reqTrack)
+
+	done <- true
+}
+
+// Send request sequentially using headless browser until maxRequests is reached.
+// Each client will not depend on each other and has its own request timeline.
+func sendRequestsHeadless(
+	_ctx context.Context,
+	browser *rod.Browser,
+	url *string,
+	workerNumber int64,
+	reqCounter *ChannelCounter,
+	reqTracker *[]RequestTracker,
+	wg *sync.WaitGroup) {
+
+	// done is to indicate that a request has got response
+	done := make(chan bool)
+	defer wg.Done()
+
+	for {
+		nRequests := reqCounter.Read()
+		if nRequests > maxRequests {
+			break
+		}
+		reqCounter.Add(1)
+
+		// We can send request synchronously, but we will use go routine for further operation
+		go requestHeadless(browser, url, reqTracker, done)
+		<-done
+	}
 }
 
 type ChannelCounter struct {
@@ -249,6 +307,10 @@ func RequestPerSecond(r *[]RequestTracker, maxRequests uint64) float64 {
 	// Request per second = total request / total time
 	// Total time is in milliseconds
 	rps := float64(maxRequests) / sum * 1000
-	fmt.Printf("Request per second\t\t%4.0f req/s\n", rps)
+	if rps < 0 {
+		fmt.Printf("Request per second\t\t%4.3f req/s\n", rps)
+	} else {
+		fmt.Printf("Request per second\t\t%4.0f req/s\n", rps)
+	}
 	return rps
 }
