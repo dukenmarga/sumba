@@ -6,7 +6,7 @@ Simple server benchmark tool.
 You need to install Go 1.20 or the latest one.
 
 ```bash
-go build main.go
+go build -o sumba main.go
 ```
 
 Or you can run without compiling.
@@ -18,23 +18,23 @@ go run main.go
 
 * This will send total 100 requests, but will be sent concurrently using 10 workers (can be seen as client):
     ```bash
-    $ ./main -n 100 -c 10 -url http://localhost
+    $ ./sumba -n 100 -c 10 -url http://localhost
     ```
 
 * If you want to send request sequentially (which will not reflect the real performance), use this:
     ```bash
-    $ ./main -n 100 -c 1 -url http://localhost
+    $ ./sumba -n 100 -c 1 -url http://localhost
     ```
 
 * If you want to emulate to test a URL using headless browser (open a page and download all its resources such as CSS, JS, etc), use this:
     ```bash
-    $ ./main -n 100 -c 1 -url http://localhost -emulate true
+    $ ./sumba -n 100 -c 1 -url http://localhost -emulate true
     ```
 
 
 * Example with the results
     ```bash
-    ./main -n 100 -c 3 -url https://google.com
+    ./sumba -n 100 -c 3 -url https://google.com
     Test 100 requests using 3 workers to: https://google.com
     Average first byte time         78.8 ms
     Average time per request        78.9 ms
