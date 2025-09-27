@@ -1,4 +1,4 @@
-# fire-ant
+# sumba
 Simple server benchmark tool.
 
 
