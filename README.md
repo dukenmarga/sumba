@@ -26,6 +26,12 @@ go run main.go
     $ ./main -n 100 -c 1 -url http://localhost
     ```
 
+* If you want to emulate to test a URL using headless browser (open a page and download all its resources such as CSS, JS, etc), use this:
+    ```bash
+    $ ./main -n 100 -c 1 -url http://localhost -emulate true
+    ```
+
+
 * Example with the results
     ```bash
     ./main -n 100 -c 3 -url https://google.com
