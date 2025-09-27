@@ -34,7 +34,9 @@ func init() {
 func main() {
 	flag.Parse()
 	maxRequests = uint64(*n)
-	fmt.Printf("Test %d requests using %d workers to: %v\n", maxRequests, *c, *url)
+	fmt.Printf("Target\t%v\n", *url)
+	fmt.Printf("Total requests\t\t\t%4.0d\n", maxRequests)
+	fmt.Printf("Worker used\t\t\t%4.0d\n", *c)
 
 	ctx := context.Background()
 
