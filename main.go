@@ -21,6 +21,8 @@ var (
 
 	stepConnection = int64(maxRequests / 10)
 	done           = make(chan struct{})
+
+	mu sync.Mutex
 )
 
 func init() {
@@ -139,6 +141,8 @@ func request(client http.RoundTripper, url *string, reqsTracker *[]RequestTracke
 	totalTime = time.Since(start)
 	reqTrack.totalTime = float64(totalTime / time.Millisecond)
 
+	mu.Lock()
+	defer mu.Unlock()
 	*reqsTracker = append(*reqsTracker, reqTrack)
 
 	done <- true
