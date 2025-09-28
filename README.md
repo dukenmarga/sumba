@@ -22,6 +22,13 @@ Or you can run without compiling.
 go run main.go
 ```
 
+### Download
+If you prefer pre-compiled binary, you can download it in [Releases page](https://github.com/dukenmarga/sumba/releases). Supported version:
+- Linux x86_64
+- Macos Arm64
+- Windows x86_64
+- FreeBSD x86_64
+
 ### How to use
 
 * This will send total 100 requests, but will be sent concurrently using 10 workers (can be seen as client):
