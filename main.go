@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"net/http/httptrace"
+	"strings"
 	"sync"
 	"time"
 
@@ -20,6 +21,7 @@ var (
 	emulate     *bool
 	maxRequests uint64
 
+	C   *string
 	url *string
 
 	stepConnection = int64(maxRequests / 10)
@@ -33,6 +35,7 @@ func init() {
 	c = flag.Int64("c", 10, "number of concurrent workers")
 	emulate = flag.Bool("emulate", false, "emulate headless browser")
 	url = flag.String("url", "http://127.0.0.1", "URL string")
+	C = flag.String("C", "", "cookie in the form of \"key1=value1;key2=value2\"")
 }
 
 func main() {
@@ -52,6 +55,11 @@ func main() {
 	// tracker to monitor each request
 	reqsTracker := NewRequestTracker()
 
+	// Parameters
+	param := Params{
+		Cookies: parseCookie(*C),
+	}
+
 	// Monitor each routine and wait them until desired number of requests is reached
 	workers := sync.WaitGroup{}
 	for i := int64(0); i < *c; i++ {
@@ -67,7 +75,7 @@ func main() {
 			// Unique http client will be used and reused for 1 routine
 			client := http.DefaultTransport
 			// This go routine will start sending requests sequentially one after each request is completed
-			go sendRequests(ctx, client, url, i, reqCounter, reqsTracker, &workers)
+			go sendRequests(ctx, client, url, i, reqCounter, reqsTracker, param, &workers)
 		}
 
 	}
@@ -80,6 +88,24 @@ func main() {
 
 }
 
+func parseCookie(C string) []http.Cookie {
+	httpCookie := []http.Cookie{}
+
+	cookieItems := strings.Split(C, ";")
+	for _, item := range cookieItems {
+		item = strings.TrimSpace(item)
+		keyValue := strings.Split(item, "=")
+		if len(keyValue) != 2 {
+			continue
+		}
+		httpCookie = append(httpCookie, http.Cookie{
+			Name:  keyValue[0],
+			Value: keyValue[1],
+		})
+	}
+	return httpCookie
+}
+
 // Tell the client to send request sequentially until maxRequests is reached
 // Each client will not depend on each other and has its own request timeline.
 func sendRequests(_ctx context.Context,
@@ -88,6 +114,7 @@ func sendRequests(_ctx context.Context,
 	workerNumber int64,
 	reqCounter *ChannelCounter,
 	reqTracker *[]RequestTracker,
+	param Params,
 	wg *sync.WaitGroup) {
 
 	// done is to indicate that a request has got response
@@ -102,14 +129,14 @@ func sendRequests(_ctx context.Context,
 		reqCounter.Add(1)
 
 		// We can send request synchronously, but we will use go routine for further operation
-		go request(client, url, reqTracker, done)
+		go request(client, url, reqTracker, param, done)
 		<-done
 	}
 }
 
 // Send a http request to specified url using a specified client and trace
 // the request time
-func request(client http.RoundTripper, url *string, reqsTracker *[]RequestTracker, done chan bool) {
+func request(client http.RoundTripper, url *string, reqsTracker *[]RequestTracker, params Params, done chan bool) {
 	req, _ := http.NewRequest("GET", *url, nil)
 
 	var start, connect, dnsStart, tlsHandshake time.Time
@@ -149,7 +176,15 @@ func request(client http.RoundTripper, url *string, reqsTracker *[]RequestTracke
 		},
 	}
 
+	// New request
 	req = req.WithContext(httptrace.WithClientTrace(req.Context(), trace))
+
+	// Add cookies
+	for _, cookie := range params.Cookies {
+		req.AddCookie(&cookie)
+	}
+
+	// Start the request
 	start = time.Now()
 	if _, err := client.RoundTrip(req); err != nil {
 		log.Println(err)
@@ -208,6 +243,10 @@ func sendRequestsHeadless(
 		go requestHeadless(browser, url, reqTracker, done)
 		<-done
 	}
+}
+
+type Params struct {
+	Cookies []http.Cookie
 }
 
 type ChannelCounter struct {
