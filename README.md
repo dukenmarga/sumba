@@ -56,6 +56,13 @@ If you prefer pre-compiled binary, you can download it in [Releases page](https:
     Request per second                13 req/s
     ```
 
+### Options
+
+```
+-C "key1=value1; key2=value2"
+    Add cookie to the request in the form of "key1=value1; key2=value2"
+```
+
 ### How it works
 The app will send requests to target URL until it reaches value defined by parameter `n`
 and use `c` number of workers (clients) to finish all requests.
