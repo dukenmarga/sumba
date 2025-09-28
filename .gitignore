@@ -21,3 +21,5 @@
 go.work
 
 main
+*arm64*
+*amd64*
