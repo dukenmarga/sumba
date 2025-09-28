@@ -1,7 +1,7 @@
 #!/bin/bash
 
 APP_NAME="sumba"
-VERSION="v0.1.0"
+VERSION="v0.2.0"
 
 # Define the target platforms and architectures
 PLATFORMS=(
