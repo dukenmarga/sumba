@@ -23,6 +23,7 @@ var (
 
 	C   *string
 	url *string
+	m   *string
 
 	stepConnection = int64(maxRequests / 10)
 	done           = make(chan struct{})
@@ -36,6 +37,7 @@ func init() {
 	emulate = flag.Bool("emulate", false, "emulate headless browser")
 	url = flag.String("url", "http://127.0.0.1", "URL string")
 	C = flag.String("C", "", "cookie in the form of \"key1=value1;key2=value2\"")
+	m = flag.String("m", "GET", "HTTP method: GET (default), POST (set -p for POST-file)")
 }
 
 func main() {
@@ -57,6 +59,7 @@ func main() {
 
 	// Request Data
 	reqData := RequestData{
+		Method:  *m,
 		Cookies: parseCookie(*C),
 	}
 
@@ -137,7 +140,7 @@ func sendRequests(_ctx context.Context,
 // Send a http request to specified url using a specified client and trace
 // the request time
 func request(client http.RoundTripper, url *string, reqsTracker *[]RequestTracker, reqData RequestData, done chan bool) {
-	req, _ := http.NewRequest("GET", *url, nil)
+	req, _ := http.NewRequest(reqData.Method, *url, nil)
 
 	var start, connect, dnsStart, tlsHandshake time.Time
 	var firstByteTime, connectTime, dnsQueryTime, tlsHandshakeTime, totalTime time.Duration
@@ -246,6 +249,7 @@ func sendRequestsHeadless(
 }
 
 type RequestData struct {
+	Method  string
 	Cookies []http.Cookie
 }
 
