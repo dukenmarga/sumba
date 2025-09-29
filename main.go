@@ -55,8 +55,8 @@ func main() {
 	// tracker to monitor each request
 	reqsTracker := NewRequestTracker()
 
-	// Parameters
-	param := Params{
+	// Request Data
+	reqData := RequestData{
 		Cookies: parseCookie(*C),
 	}
 
@@ -75,7 +75,7 @@ func main() {
 			// Unique http client will be used and reused for 1 routine
 			client := http.DefaultTransport
 			// This go routine will start sending requests sequentially one after each request is completed
-			go sendRequests(ctx, client, url, i, reqCounter, reqsTracker, param, &workers)
+			go sendRequests(ctx, client, url, i, reqCounter, reqsTracker, reqData, &workers)
 		}
 
 	}
@@ -114,7 +114,7 @@ func sendRequests(_ctx context.Context,
 	workerNumber int64,
 	reqCounter *ChannelCounter,
 	reqTracker *[]RequestTracker,
-	param Params,
+	reqData RequestData,
 	wg *sync.WaitGroup) {
 
 	// done is to indicate that a request has got response
@@ -129,14 +129,14 @@ func sendRequests(_ctx context.Context,
 		reqCounter.Add(1)
 
 		// We can send request synchronously, but we will use go routine for further operation
-		go request(client, url, reqTracker, param, done)
+		go request(client, url, reqTracker, reqData, done)
 		<-done
 	}
 }
 
 // Send a http request to specified url using a specified client and trace
 // the request time
-func request(client http.RoundTripper, url *string, reqsTracker *[]RequestTracker, params Params, done chan bool) {
+func request(client http.RoundTripper, url *string, reqsTracker *[]RequestTracker, reqData RequestData, done chan bool) {
 	req, _ := http.NewRequest("GET", *url, nil)
 
 	var start, connect, dnsStart, tlsHandshake time.Time
@@ -180,7 +180,7 @@ func request(client http.RoundTripper, url *string, reqsTracker *[]RequestTracke
 	req = req.WithContext(httptrace.WithClientTrace(req.Context(), trace))
 
 	// Add cookies
-	for _, cookie := range params.Cookies {
+	for _, cookie := range reqData.Cookies {
 		req.AddCookie(&cookie)
 	}
 
@@ -245,7 +245,7 @@ func sendRequestsHeadless(
 	}
 }
 
-type Params struct {
+type RequestData struct {
 	Cookies []http.Cookie
 }
 
