@@ -1,13 +1,16 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"net/http/httptrace"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -24,6 +27,7 @@ var (
 	C   *string
 	url *string
 	m   *string
+	p   *string
 
 	stepConnection = int64(maxRequests / 10)
 	done           = make(chan struct{})
@@ -38,6 +42,7 @@ func init() {
 	url = flag.String("url", "http://127.0.0.1", "URL string")
 	C = flag.String("C", "", "cookie in the form of \"key1=value1;key2=value2\"")
 	m = flag.String("m", "GET", "HTTP method: GET (default), POST (set -p for POST-file)")
+	p = flag.String("p", "", "POST-file, containing payload for POST method. Use -T to define type")
 }
 
 func main() {
@@ -59,8 +64,9 @@ func main() {
 
 	// Request Data
 	reqData := RequestData{
-		Method:  *m,
-		Cookies: parseCookie(*C),
+		Method:   *m,
+		Cookies:  parseCookie(*C),
+		PostFile: *p,
 	}
 
 	// Monitor each routine and wait them until desired number of requests is reached
@@ -140,7 +146,15 @@ func sendRequests(_ctx context.Context,
 // Send a http request to specified url using a specified client and trace
 // the request time
 func request(client http.RoundTripper, url *string, reqsTracker *[]RequestTracker, reqData RequestData, done chan bool) {
-	req, _ := http.NewRequest(reqData.Method, *url, nil)
+	var payload *bytes.Buffer
+	if reqData.Method == "POST" {
+		payloadBytes, err := readFile(reqData.PostFile)
+		if err != nil {
+			log.Fatal(err)
+		}
+		payload = bytes.NewBuffer(payloadBytes)
+	}
+	req, _ := http.NewRequest(reqData.Method, *url, payload)
 
 	var start, connect, dnsStart, tlsHandshake time.Time
 	var firstByteTime, connectTime, dnsQueryTime, tlsHandshakeTime, totalTime time.Duration
@@ -249,8 +263,9 @@ func sendRequestsHeadless(
 }
 
 type RequestData struct {
-	Method  string
-	Cookies []http.Cookie
+	Method   string
+	Cookies  []http.Cookie
+	PostFile string
 }
 
 type ChannelCounter struct {
@@ -358,4 +373,22 @@ func RequestPerSecond(r *[]RequestTracker, maxRequests uint64) float64 {
 		fmt.Printf("Request per second\t\t%4.0f req/s\n", rps)
 	}
 	return rps
+}
+
+func readFile(path string) ([]byte, error) {
+	if path == "" {
+		return nil, fmt.Errorf("empty file path")
+	}
+
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open file: %w", err)
+	}
+	defer file.Close()
+
+	data, err := io.ReadAll(file)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read file: %w", err)
+	}
+	return data, nil
 }
