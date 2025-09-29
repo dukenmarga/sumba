@@ -61,6 +61,10 @@ If you prefer pre-compiled binary, you can download it in [Releases page](https:
 ```
 -C "key1=value1; key2=value2"
     Add cookie to the request in the form of "key1=value1; key2=value2"
+-m Method: GET, POST
+    Request method, GET is default. If POST, use -p to define file containing the payload
+-p POST-file
+    File containing payload for POST method
 ```
 
 ### How it works
