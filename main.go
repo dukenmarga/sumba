@@ -146,7 +146,7 @@ func sendRequests(_ctx context.Context,
 // Send a http request to specified url using a specified client and trace
 // the request time
 func request(client http.RoundTripper, url *string, reqsTracker *[]RequestTracker, reqData RequestData, done chan bool) {
-	var payload *bytes.Buffer
+	payload := &bytes.Buffer{}
 	if reqData.Method == "POST" {
 		payloadBytes, err := readFile(reqData.PostFile)
 		if err != nil {
