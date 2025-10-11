@@ -61,6 +61,7 @@ func main() {
 
 	// Request Data
 	reqData := RequestData{
+		URL:      *url,
 		Method:   *m,
 		Cookies:  parseCookie(*C),
 		PostFile: *p,
@@ -81,7 +82,7 @@ func main() {
 			// Unique http client will be used and reused for 1 routine
 			client := http.DefaultTransport
 			// This go routine will start sending requests sequentially one after each request is completed
-			go sendRequests(ctx, client, url, i, reqCounter, reqsTracker, reqData, &workers)
+			go sendRequests(ctx, client, i, reqCounter, reqsTracker, reqData, &workers)
 		}
 
 	}
@@ -115,7 +116,6 @@ func parseCookie(C string) []http.Cookie {
 // Each client will not depend on each other and has its own request timeline.
 func sendRequests(_ctx context.Context,
 	client http.RoundTripper,
-	url *string,
 	workerNumber int64,
 	reqCounter *ChannelCounter,
 	reqTracker *[]RequestTracker,
@@ -134,14 +134,14 @@ func sendRequests(_ctx context.Context,
 		reqCounter.Add(1)
 
 		// We can send request synchronously, but we will use go routine for further operation
-		go request(client, url, reqTracker, reqData, done)
+		go request(client, reqTracker, reqData, done)
 		<-done
 	}
 }
 
 // Send a http request to specified url using a specified client and trace
 // the request time
-func request(client http.RoundTripper, url *string, reqsTracker *[]RequestTracker, reqData RequestData, done chan bool) {
+func request(client http.RoundTripper, reqsTracker *[]RequestTracker, reqData RequestData, done chan bool) {
 	payload := &bytes.Buffer{}
 	if reqData.Method == "POST" {
 		payloadBytes, err := readFile(reqData.PostFile)
@@ -150,7 +150,7 @@ func request(client http.RoundTripper, url *string, reqsTracker *[]RequestTracke
 		}
 		payload = bytes.NewBuffer(payloadBytes)
 	}
-	req, err := http.NewRequest(reqData.Method, *url, payload)
+	req, err := http.NewRequest(reqData.Method, reqData.URL, payload)
 	if err != nil {
 		log.Printf("NewRequest: %v", err)
 	}
@@ -262,6 +262,7 @@ func sendRequestsHeadless(
 }
 
 type RequestData struct {
+	URL      string
 	Method   string
 	Cookies  []http.Cookie
 	PostFile string
