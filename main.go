@@ -29,9 +29,6 @@ var (
 	m   *string
 	p   *string
 
-	stepConnection = int64(maxRequests / 10)
-	done           = make(chan struct{})
-
 	mu sync.Mutex
 )
 
@@ -154,7 +151,10 @@ func request(client http.RoundTripper, url *string, reqsTracker *[]RequestTracke
 		}
 		payload = bytes.NewBuffer(payloadBytes)
 	}
-	req, _ := http.NewRequest(reqData.Method, *url, payload)
+	req, err := http.NewRequest(reqData.Method, *url, payload)
+	if err != nil {
+		log.Printf("NewRequest: %v", err)
+	}
 
 	var start, connect, dnsStart, tlsHandshake time.Time
 	var firstByteTime, connectTime, dnsQueryTime, tlsHandshakeTime, totalTime time.Duration
