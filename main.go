@@ -30,6 +30,12 @@ var (
 	p   *string
 
 	mu sync.Mutex
+
+	// counter to keep track of number of requests
+	reqCounter = NewCounterChannel(0)
+
+	// tracker to monitor each request
+	reqsTracker = NewRequestTracker()
 )
 
 func init() {
@@ -40,6 +46,7 @@ func init() {
 	C = flag.String("C", "", "cookie in the form of \"key1=value1;key2=value2\"")
 	m = flag.String("m", "GET", "HTTP method: GET (default), POST (set -p for POST-file)")
 	p = flag.String("p", "", "POST-file, containing payload for POST method. Use -T to define type")
+
 }
 
 func main() {
@@ -52,12 +59,6 @@ func main() {
 	fmt.Printf("Worker used\t\t\t%4.0d\n", *c)
 
 	ctx := context.Background()
-
-	// counter to keep track of number of requests
-	reqCounter := NewCounterChannel(0)
-
-	// tracker to monitor each request
-	reqsTracker := NewRequestTracker()
 
 	// Request Data
 	reqData := RequestData{
@@ -77,12 +78,12 @@ func main() {
 			browser := rod.New().MustConnect()
 			defer browser.MustClose()
 
-			go sendRequestsHeadless(ctx, browser, url, i, reqCounter, reqsTracker, &workers)
+			go sendRequestsHeadless(ctx, browser, url, i, &workers)
 		} else {
 			// Unique http client will be used and reused for 1 routine
 			client := http.DefaultTransport
 			// This go routine will start sending requests sequentially one after each request is completed
-			go sendRequests(ctx, client, i, reqCounter, reqsTracker, reqData, &workers)
+			go sendRequests(ctx, client, i, reqData, &workers)
 		}
 
 	}
@@ -117,8 +118,6 @@ func parseCookie(C string) []http.Cookie {
 func sendRequests(_ctx context.Context,
 	client http.RoundTripper,
 	workerNumber int64,
-	reqCounter *ChannelCounter,
-	reqTracker *[]RequestTracker,
 	reqData RequestData,
 	wg *sync.WaitGroup) {
 
@@ -134,14 +133,14 @@ func sendRequests(_ctx context.Context,
 		reqCounter.Add(1)
 
 		// We can send request synchronously, but we will use go routine for further operation
-		go request(client, reqTracker, reqData, done)
+		go request(client, reqData, done)
 		<-done
 	}
 }
 
 // Send a http request to specified url using a specified client and trace
 // the request time
-func request(client http.RoundTripper, reqsTracker *[]RequestTracker, reqData RequestData, done chan bool) {
+func request(client http.RoundTripper, reqData RequestData, done chan bool) {
 	payload := &bytes.Buffer{}
 	if reqData.Method == "POST" {
 		payloadBytes, err := readFile(reqData.PostFile)
@@ -215,7 +214,7 @@ func request(client http.RoundTripper, reqsTracker *[]RequestTracker, reqData Re
 	done <- true
 }
 
-func requestHeadless(browser *rod.Browser, url *string, reqsTracker *[]RequestTracker, done chan bool) {
+func requestHeadless(browser *rod.Browser, url *string, done chan bool) {
 	var start time.Time
 	var totalTime time.Duration
 
@@ -240,8 +239,6 @@ func sendRequestsHeadless(
 	browser *rod.Browser,
 	url *string,
 	workerNumber int64,
-	reqCounter *ChannelCounter,
-	reqTracker *[]RequestTracker,
 	wg *sync.WaitGroup) {
 
 	// done is to indicate that a request has got response
@@ -256,7 +253,7 @@ func sendRequestsHeadless(
 		reqCounter.Add(1)
 
 		// We can send request synchronously, but we will use go routine for further operation
-		go requestHeadless(browser, url, reqTracker, done)
+		go requestHeadless(browser, url, done)
 		<-done
 	}
 }
