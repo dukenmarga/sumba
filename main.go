@@ -97,8 +97,7 @@ func main() {
 func parseCookie(C string) []http.Cookie {
 	httpCookie := []http.Cookie{}
 
-	cookieItems := strings.Split(C, ";")
-	for _, item := range cookieItems {
+	for item := range strings.SplitSeq(C, ";") {
 		item = strings.TrimSpace(item)
 		keyValue := strings.Split(item, "=")
 		if len(keyValue) != 2 {
