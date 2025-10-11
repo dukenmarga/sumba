@@ -164,27 +164,27 @@ func request(client http.RoundTripper, url *string, reqsTracker *[]RequestTracke
 		DNSStart: func(dsi httptrace.DNSStartInfo) { dnsStart = time.Now() },
 		DNSDone: func(ddi httptrace.DNSDoneInfo) {
 			dnsQueryTime = time.Since(dnsStart)
-			reqTrack.dnsQueryTime = float64(dnsQueryTime / time.Millisecond)
+			reqTrack.dnsQueryTime = float64(dnsQueryTime / time.Microsecond)
 		},
 
 		// Measure TLS Handshake time
 		TLSHandshakeStart: func() { tlsHandshake = time.Now() },
 		TLSHandshakeDone: func(cs tls.ConnectionState, err error) {
 			tlsHandshakeTime = time.Since(tlsHandshake)
-			reqTrack.tlsHandshakeTime = float64(tlsHandshakeTime / time.Millisecond)
+			reqTrack.tlsHandshakeTime = float64(tlsHandshakeTime / time.Microsecond)
 		},
 
 		// Measure Connect time to server
 		ConnectStart: func(network, addr string) { connect = time.Now() },
 		ConnectDone: func(network, addr string, err error) {
 			connectTime = time.Since(connect)
-			reqTrack.connectTime = float64(connectTime / time.Millisecond)
+			reqTrack.connectTime = float64(connectTime / time.Microsecond)
 		},
 
 		// Measure time to get the first byte
 		GotFirstResponseByte: func() {
 			firstByteTime = time.Since(start)
-			reqTrack.firstByteTime = float64(firstByteTime / time.Millisecond)
+			reqTrack.firstByteTime = float64(firstByteTime / time.Microsecond)
 		},
 
 		GotConn: func(info httptrace.GotConnInfo) {
@@ -206,7 +206,7 @@ func request(client http.RoundTripper, url *string, reqsTracker *[]RequestTracke
 		log.Println(err)
 	}
 	totalTime = time.Since(start)
-	reqTrack.totalTime = float64(totalTime / time.Millisecond)
+	reqTrack.totalTime = float64(totalTime / time.Microsecond)
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -224,7 +224,7 @@ func requestHeadless(browser *rod.Browser, url *string, reqsTracker *[]RequestTr
 	start = time.Now()
 	_ = browser.MustPage(*url).MustWaitLoad()
 	totalTime = time.Since(start)
-	reqTrack.totalTime = float64(totalTime / time.Millisecond)
+	reqTrack.totalTime = float64(totalTime / time.Microsecond)
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -326,23 +326,29 @@ func NewRequestTracker() *[]RequestTracker {
 	return req
 }
 
-// Compute average first byte time in milliseconds
+// Compute average first byte time
 func AverageFirstByteTime(r *[]RequestTracker) float64 {
 	sum := SumFirstByteTime(r)
 	average := sum / float64(len(*r))
-	fmt.Printf("Average first byte time\t\t%4.1f ms\n", average)
+
+	averageFormatted, unit := formatDurationUnit(average)
+	fmt.Printf("Average first byte time\t\t%4.0f %s\n", averageFormatted, unit)
+
 	return average
 }
 
-// Compute average request time in milliseconds
+// Compute average request time
 func AverageTotalTime(r *[]RequestTracker) float64 {
 	sum := SumTotalTime(r)
 	average := sum / float64(len(*r))
-	fmt.Printf("Average time per request\t%4.1f ms\n", average)
+
+	averageFormatted, unit := formatDurationUnit(average)
+	fmt.Printf("Average time per request\t%4.0f %s\n", averageFormatted, unit)
+
 	return average
 }
 
-// Sum up the first byte time for all requests from all workers in milliseconds
+// Sum up the first byte time for all requests from all workers in microsecond
 func SumFirstByteTime(r *[]RequestTracker) float64 {
 	sum := 0.0
 	for _, reqTrack := range *r {
@@ -351,7 +357,7 @@ func SumFirstByteTime(r *[]RequestTracker) float64 {
 	return sum
 }
 
-// Sum up the total request time for all requests from all workers in milliseconds
+// Sum up the total request time for all requests from all workers in microsecond
 func SumTotalTime(r *[]RequestTracker) float64 {
 	sum := 0.0
 	for _, reqTrack := range *r {
@@ -364,8 +370,8 @@ func SumTotalTime(r *[]RequestTracker) float64 {
 func RequestPerSecond(r *[]RequestTracker, maxRequests uint64) float64 {
 	sum := SumTotalTime(r)
 	// Request per second = total request / total time
-	// Total time is in milliseconds
-	rps := float64(maxRequests) / sum * 1000
+	// Total time is in microseconds
+	rps := float64(maxRequests) / sum * 1000000
 	if rps < 0 {
 		fmt.Printf("Request per second\t\t%4.3f req/s\n", rps)
 	} else {
@@ -390,4 +396,16 @@ func readFile(path string) ([]byte, error) {
 		return nil, fmt.Errorf("failed to read file: %w", err)
 	}
 	return data, nil
+}
+
+// Format t (in microsecond) into readable duration format, depending on the value
+// e.g t=1234567 => t=1.234567 s or t=1234 => t=1.234 ms
+func formatDurationUnit(t float64) (float64, string) {
+	if t > 1000 && t < 1000000 {
+		return t / 1000, "ms"
+	}
+	if t >= 1000000 {
+		return t / 1000000, "s"
+	}
+	return t, "μs"
 }
