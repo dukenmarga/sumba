@@ -30,7 +30,8 @@ var (
 	m       *string
 	p       *string
 	E       *string
-	S       *bool
+	classic *bool
+	stress  *bool
 	skipTLS *bool
 
 	mu sync.Mutex
@@ -51,7 +52,8 @@ func init() {
 	m = flag.String("m", "GET", "HTTP method: GET (default), POST (set -p for POST-file)")
 	p = flag.String("p", "", "POST-file, containing payload for POST method. Use -T to define type")
 	E = flag.String("E", "", "certificate file")
-	S = flag.Bool("S", false, "stress test")
+	classic = flag.Bool("classic", false, "classic benchmark")
+	stress = flag.Bool("stress", false, "stress test")
 	skipTLS = flag.Bool("skipTLS", false, "skip TLS verification")
 }
 
@@ -76,7 +78,7 @@ func main() {
 
 	// Classic benchmark:
 	// Send n requests from c workers concurrently
-	if *n > 0 {
+	if *classic {
 		// Monitor each routine and wait them until desired number of requests is reached
 		workers := sync.WaitGroup{}
 		for i := int64(0); i < *c; i++ {
@@ -111,7 +113,7 @@ func main() {
 	// - For example: rps = 25, interval = 1s / 25 = 0.04s = 40ms / request
 	// - Send request to queue every 40ms (technically to a channel as queue)
 	// - Workers (default: 100) will pick up request from the channel and send it
-	if *S {
+	if *stress {
 		// rps is the number of requests per second, initial value is 10
 		rps := 10
 
