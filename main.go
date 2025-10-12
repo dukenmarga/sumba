@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"flag"
 	"fmt"
 	"io"
@@ -24,11 +25,13 @@ var (
 	emulate     *bool
 	maxRequests uint64
 
-	C   *string
-	url *string
-	m   *string
-	p   *string
-	S   *bool
+	C       *string
+	url     *string
+	m       *string
+	p       *string
+	E       *string
+	S       *bool
+	skipTLS *bool
 
 	mu sync.Mutex
 
@@ -47,7 +50,9 @@ func init() {
 	C = flag.String("C", "", "cookie in the form of \"key1=value1;key2=value2\"")
 	m = flag.String("m", "GET", "HTTP method: GET (default), POST (set -p for POST-file)")
 	p = flag.String("p", "", "POST-file, containing payload for POST method. Use -T to define type")
+	E = flag.String("E", "", "certificate file")
 	S = flag.Bool("S", false, "stress test")
+	skipTLS = flag.Bool("skipTLS", false, "skip TLS verification")
 }
 
 func main() {
@@ -85,7 +90,7 @@ func main() {
 				go sendRequestsHeadless(ctx, browser, url, i, &workers)
 			} else {
 				// Unique http client will be used and reused for 1 routine
-				client := http.DefaultTransport
+				client := NewHTTPClient(*skipTLS, *E)
 				// This go routine will start sending requests sequentially one after each request is completed
 				go sendRequests(ctx, client, i, reqData, &workers)
 			}
@@ -165,6 +170,7 @@ func main() {
 		// This routine will pick up request from queue and send it
 		wg.Add(1)
 		go func() {
+			doneReq := make(chan bool)
 		loop:
 			for {
 				select {
@@ -179,12 +185,13 @@ func main() {
 							// release the worker
 							<-workers
 						}()
-						client := http.DefaultTransport
+						client := NewHTTPClient(*skipTLS, *E)
 						reqCounter.Add(1)
 
 						// Send request. We set the rps to categorise the request
 						reqData.RPS = rps
-						request(client, reqData)
+						go requestWait(client, reqData, doneReq)
+						<-doneReq
 					}()
 				}
 			}
@@ -194,7 +201,41 @@ func main() {
 		wg.Wait()
 		RequestPerSecondStress(reqsTracker, maxRequests)
 	}
+}
 
+func NewHTTPClient(skipTLS bool, certificateFile string) *http.Client {
+	caCertPool := x509.NewCertPool()
+	if certificateFile != "" {
+		caCertPool = readCertificate(certificateFile)
+	}
+	return &http.Client{
+		Transport: &http.Transport{
+			Proxy: http.ProxyFromEnvironment,
+			TLSClientConfig: &tls.Config{
+				InsecureSkipVerify: skipTLS,
+				RootCAs:            caCertPool,
+			},
+			ForceAttemptHTTP2:     true,
+			MaxIdleConns:          100,
+			IdleConnTimeout:       90 * time.Second,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ExpectContinueTimeout: 1 * time.Second,
+		},
+		Timeout: 10 * time.Second,
+	}
+}
+
+// Read the self-signed certificate, e.g localhost.crt
+func readCertificate(path string) *x509.CertPool {
+	// Load the self-signed certificate
+	caCert, err := os.ReadFile(path)
+	if err != nil {
+		log.Fatalf("Error reading CA certificate: %v", err)
+	}
+	caCertPool := x509.NewCertPool()
+	caCertPool.AppendCertsFromPEM(caCert)
+
+	return caCertPool
 }
 
 func parseCookie(C string) []http.Cookie {
@@ -217,7 +258,7 @@ func parseCookie(C string) []http.Cookie {
 // Tell the client to send request sequentially until maxRequests is reached
 // Each client will not depend on each other and has its own request timeline.
 func sendRequests(_ctx context.Context,
-	client http.RoundTripper,
+	client *http.Client,
 	workerNumber int64,
 	reqData RequestData,
 	wg *sync.WaitGroup) {
@@ -241,12 +282,12 @@ func sendRequests(_ctx context.Context,
 
 // Send a http request to specified url using a specified client and trace
 // the request time
-func requestWait(client http.RoundTripper, reqData RequestData, done chan bool) {
+func requestWait(client *http.Client, reqData RequestData, done chan bool) {
 	request(client, reqData)
 	done <- true
 }
 
-func request(client http.RoundTripper, reqData RequestData) {
+func request(client *http.Client, reqData RequestData) {
 	payload := &bytes.Buffer{}
 	if reqData.Method == "POST" {
 		payloadBytes, err := readFile(reqData.PostFile)
@@ -307,7 +348,7 @@ func request(client http.RoundTripper, reqData RequestData) {
 
 	// Start the request
 	start = time.Now()
-	if _, err := client.RoundTrip(req); err != nil {
+	if _, err := client.Do(req); err != nil {
 		log.Println(err)
 	}
 	totalTime = time.Since(start)
