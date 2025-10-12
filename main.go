@@ -111,7 +111,7 @@ func main() {
 		rps := 10
 
 		// Holds the request queue
-		reqQueue := make(chan int)
+		reqQueue := make(chan struct{})
 
 		// worker is the number of workers
 		maxWorkers := 1000
@@ -129,50 +129,70 @@ func main() {
 		wg := sync.WaitGroup{}
 
 		// This routine will increase rps every 3 seconds
+		ctxTicker, cancelTicker := context.WithCancel(context.Background())
 		wg.Add(1)
 		go func() {
 			for range ticker.C {
-				rps += 10
+				rps += 25
 				fmt.Printf("Sending requests at\t%d RPS\n", rps)
-				interval.Reset(time.Duration(1000/rps) * time.Millisecond)
-				if rps >= 50 {
+				interval.Reset(time.Duration(1000000/rps) * time.Microsecond)
+				if rps >= 200 {
+					cancelTicker()
 					break
 				}
 			}
-			wg.Done()
+			defer wg.Done()
 		}()
 
 		// This routine will send request to queue every 'interval' time
+		ctxInterval, cancelInterval := context.WithCancel(context.Background())
 		wg.Add(1)
 		go func() {
-			// Hacky way to start sending request immediately after interval.Reset
-			for ; true; <-interval.C {
-				reqQueue <- 1
+		loop:
+			for {
+				select {
+				// If ticker is cancelled, we cancel the interval and exit the loop
+				case <-ctxTicker.Done():
+					cancelInterval()
+					break loop // Exit the loop when context is cancelled
+				case <-interval.C:
+					reqQueue <- struct{}{}
+				}
 			}
-			wg.Done()
+			defer wg.Done()
 		}()
 
+		// This routine will pick up request from queue and send it
+		wg.Add(1)
 		go func() {
-			for range <-reqQueue {
-				// assign a worker to this request
-				workers <- struct{}{}
+		loop:
+			for {
+				select {
+				case <-ctxInterval.Done():
+					break loop
+				case <-reqQueue:
+					// assign a worker to this request
+					workers <- struct{}{}
 
-				client := http.DefaultTransport
-				reqCounter.Add(1)
+					go func() {
+						defer func() {
+							// release the worker
+							<-workers
+						}()
+						client := http.DefaultTransport
+						reqCounter.Add(1)
 
-				go func() {
-					defer func() {
-						// release the worker
-						<-workers
+						// Send request. We set the rps to categorise the request
+						reqData.RPS = rps
+						request(client, reqData)
 					}()
-					// Send request
-					request(client, reqData)
-				}()
+				}
 			}
-			wg.Done()
+			defer wg.Done()
 		}()
 
 		wg.Wait()
+		RequestPerSecondStress(reqsTracker, maxRequests)
 	}
 
 }
@@ -292,6 +312,7 @@ func request(client http.RoundTripper, reqData RequestData) {
 	}
 	totalTime = time.Since(start)
 	reqTrack.totalTime = float64(totalTime / time.Microsecond)
+	reqTrack.rps = reqData.RPS
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -346,8 +367,9 @@ func sendRequestsHeadless(
 type RequestData struct {
 	URL      string
 	Method   string
-	Cookies  []http.Cookie
 	PostFile string
+	RPS      int
+	Cookies  []http.Cookie
 }
 
 type ChannelCounter struct {
@@ -401,6 +423,7 @@ type RequestTracker struct {
 	tlsHandshakeTime float64
 	firstByteTime    float64
 	totalTime        float64
+	rps              int
 }
 
 // Initialise the request tracker
@@ -461,6 +484,14 @@ func RequestPerSecond(r *[]RequestTracker, maxRequests uint64) float64 {
 		fmt.Printf("Request per second\t\t%4.0f req/s\n", rps)
 	}
 	return rps
+}
+
+// Calculates server benchmark as request per second
+func RequestPerSecondStress(r *[]RequestTracker, maxRequests uint64) float64 {
+	for _, reqTrack := range *r {
+		fmt.Printf("%v;%v\n", reqTrack.firstByteTime, reqTrack.totalTime)
+	}
+	return 0
 }
 
 func readFile(path string) ([]byte, error) {
