@@ -23,3 +23,5 @@ go.work
 main
 *arm64*
 *amd64*
+
+*tmp
