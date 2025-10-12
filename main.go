@@ -28,6 +28,7 @@ var (
 	url *string
 	m   *string
 	p   *string
+	S   *bool
 
 	mu sync.Mutex
 
@@ -39,14 +40,14 @@ var (
 )
 
 func init() {
-	n = flag.Int64("n", 100, "number of requests to perform")
-	c = flag.Int64("c", 10, "number of concurrent workers")
+	n = flag.Int64("n", 0, "number of requests to perform")
+	c = flag.Int64("c", 1, "number of concurrent workers")
 	emulate = flag.Bool("emulate", false, "emulate headless browser")
 	url = flag.String("url", "http://127.0.0.1", "URL string")
 	C = flag.String("C", "", "cookie in the form of \"key1=value1;key2=value2\"")
 	m = flag.String("m", "GET", "HTTP method: GET (default), POST (set -p for POST-file)")
 	p = flag.String("p", "", "POST-file, containing payload for POST method. Use -T to define type")
-
+	S = flag.Bool("S", false, "stress test")
 }
 
 func main() {
@@ -68,31 +69,99 @@ func main() {
 		PostFile: *p,
 	}
 
-	// Monitor each routine and wait them until desired number of requests is reached
-	workers := sync.WaitGroup{}
-	for i := int64(0); i < *c; i++ {
-		workers.Add(1)
+	// Classic benchmark:
+	// Send n requests from c workers concurrently
+	if *n > 0 {
+		// Monitor each routine and wait them until desired number of requests is reached
+		workers := sync.WaitGroup{}
+		for i := int64(0); i < *c; i++ {
+			workers.Add(1)
 
-		if *emulate {
-			// Launch headless browser
-			browser := rod.New().MustConnect()
-			defer browser.MustClose()
+			if *emulate {
+				// Launch headless browser
+				browser := rod.New().MustConnect()
+				defer browser.MustClose()
 
-			go sendRequestsHeadless(ctx, browser, url, i, &workers)
-		} else {
-			// Unique http client will be used and reused for 1 routine
-			client := http.DefaultTransport
-			// This go routine will start sending requests sequentially one after each request is completed
-			go sendRequests(ctx, client, i, reqData, &workers)
+				go sendRequestsHeadless(ctx, browser, url, i, &workers)
+			} else {
+				// Unique http client will be used and reused for 1 routine
+				client := http.DefaultTransport
+				// This go routine will start sending requests sequentially one after each request is completed
+				go sendRequests(ctx, client, i, reqData, &workers)
+			}
+
 		}
+		workers.Wait()
+		AverageFirstByteTime(reqsTracker)
+		AverageTotalTime(reqsTracker)
+		RequestPerSecond(reqsTracker, maxRequests)
 
+		return
 	}
-	workers.Wait()
 
-	AverageFirstByteTime(reqsTracker)
-	AverageTotalTime(reqsTracker)
+	// Stress test:
+	// Send requests incrementally (default: +10 requests per 3 second)
+	// How:
+	// - Determine number of rps and calculate time interval between each request
+	// - For example: rps = 25, interval = 1s / 25 = 0.04s = 40ms / request
+	// - Send request to queue every 40ms (technically to a channel as queue)
+	// - Workers (default: 100) will pick up request from the channel and send it
+	if *S {
+		// rps is the number of requests per second, initial value is 10
+		rps := 10
 
-	RequestPerSecond(reqsTracker, maxRequests)
+		// Holds the request queue
+		reqQueue := make(chan int)
+
+		// ticker is interval to increase rps
+		tInc := 1
+		ticker := time.NewTicker(time.Duration(tInc) * time.Second)
+		defer ticker.Stop()
+
+		// interval is the time interval between each request (in milliseconds)
+		interval := time.NewTicker(time.Duration(1000/rps) * time.Millisecond)
+		defer interval.Stop()
+
+		wg := sync.WaitGroup{}
+
+		// This routine will increase rps every 3 seconds
+		wg.Add(1)
+		go func() {
+			for range ticker.C {
+				rps += 10
+				fmt.Printf("Sending requests at\t%d RPS\n", rps)
+				interval.Reset(time.Duration(1000/rps) * time.Millisecond)
+				if rps >= 50 {
+					break
+				}
+			}
+			wg.Done()
+		}()
+
+		// This routine will send request to queue every 'interval' time
+		wg.Add(1)
+		go func() {
+			// Hacky way to start sending request immediately after interval.Reset
+			for ; true; <-interval.C {
+				reqQueue <- 1
+			}
+			wg.Done()
+		}()
+
+		go func() {
+			for range <-reqQueue {
+				// fmt.Printf("req: %v\n", req)
+				client := http.DefaultTransport
+				reqCounter.Add(1)
+
+				// We can send request synchronously, but we will use go routine for further operation
+				go requestRoutine(client, reqData)
+			}
+			wg.Done()
+		}()
+
+		wg.Wait()
+	}
 
 }
 
@@ -212,6 +281,79 @@ func request(client http.RoundTripper, reqData RequestData, done chan bool) {
 	*reqsTracker = append(*reqsTracker, reqTrack)
 
 	done <- true
+}
+
+func requestRoutine(client http.RoundTripper, reqData RequestData) {
+	payload := &bytes.Buffer{}
+	if reqData.Method == "POST" {
+		payloadBytes, err := readFile(reqData.PostFile)
+		if err != nil {
+			log.Fatal(err)
+		}
+		payload = bytes.NewBuffer(payloadBytes)
+	}
+	req, err := http.NewRequest(reqData.Method, reqData.URL, payload)
+	if err != nil {
+		log.Printf("NewRequest: %v", err)
+	}
+
+	var start, connect, dnsStart, tlsHandshake time.Time
+	var firstByteTime, connectTime, dnsQueryTime, tlsHandshakeTime, totalTime time.Duration
+
+	reqTrack := RequestTracker{}
+	trace := &httptrace.ClientTrace{
+		// Measure DNS lookup time
+		DNSStart: func(dsi httptrace.DNSStartInfo) { dnsStart = time.Now() },
+		DNSDone: func(ddi httptrace.DNSDoneInfo) {
+			dnsQueryTime = time.Since(dnsStart)
+			reqTrack.dnsQueryTime = float64(dnsQueryTime / time.Microsecond)
+		},
+
+		// Measure TLS Handshake time
+		TLSHandshakeStart: func() { tlsHandshake = time.Now() },
+		TLSHandshakeDone: func(cs tls.ConnectionState, err error) {
+			tlsHandshakeTime = time.Since(tlsHandshake)
+			reqTrack.tlsHandshakeTime = float64(tlsHandshakeTime / time.Microsecond)
+		},
+
+		// Measure Connect time to server
+		ConnectStart: func(network, addr string) { connect = time.Now() },
+		ConnectDone: func(network, addr string, err error) {
+			connectTime = time.Since(connect)
+			reqTrack.connectTime = float64(connectTime / time.Microsecond)
+		},
+
+		// Measure time to get the first byte
+		GotFirstResponseByte: func() {
+			firstByteTime = time.Since(start)
+			reqTrack.firstByteTime = float64(firstByteTime / time.Microsecond)
+		},
+
+		GotConn: func(info httptrace.GotConnInfo) {
+			// fmt.Printf("Connection reused: %v\n", info.Reused)
+		},
+	}
+
+	// New request
+	req = req.WithContext(httptrace.WithClientTrace(req.Context(), trace))
+
+	// Add cookies
+	for _, cookie := range reqData.Cookies {
+		req.AddCookie(&cookie)
+	}
+
+	// Start the request
+	start = time.Now()
+	if _, err := client.RoundTrip(req); err != nil {
+		log.Println(err)
+	}
+	totalTime = time.Since(start)
+	reqTrack.totalTime = float64(totalTime / time.Microsecond)
+
+	mu.Lock()
+	defer mu.Unlock()
+	*reqsTracker = append(*reqsTracker, reqTrack)
+
 }
 
 func requestHeadless(browser *rod.Browser, url *string, done chan bool) {
