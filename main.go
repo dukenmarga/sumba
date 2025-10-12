@@ -113,6 +113,10 @@ func main() {
 		// Holds the request queue
 		reqQueue := make(chan int)
 
+		// worker is the number of workers
+		maxWorkers := 1000
+		workers := make(chan struct{}, maxWorkers)
+
 		// ticker is interval to increase rps
 		tInc := 1
 		ticker := time.NewTicker(time.Duration(tInc) * time.Second)
@@ -150,12 +154,20 @@ func main() {
 
 		go func() {
 			for range <-reqQueue {
-				// fmt.Printf("req: %v\n", req)
+				// assign a worker to this request
+				workers <- struct{}{}
+
 				client := http.DefaultTransport
 				reqCounter.Add(1)
 
-				// We can send request synchronously, but we will use go routine for further operation
-				go requestRoutine(client, reqData)
+				go func() {
+					defer func() {
+						// release the worker
+						<-workers
+					}()
+					// Send request
+					request(client, reqData)
+				}()
 			}
 			wg.Done()
 		}()
@@ -202,88 +214,19 @@ func sendRequests(_ctx context.Context,
 		reqCounter.Add(1)
 
 		// We can send request synchronously, but we will use go routine for further operation
-		go request(client, reqData, done)
+		go requestWait(client, reqData, done)
 		<-done
 	}
 }
 
 // Send a http request to specified url using a specified client and trace
 // the request time
-func request(client http.RoundTripper, reqData RequestData, done chan bool) {
-	payload := &bytes.Buffer{}
-	if reqData.Method == "POST" {
-		payloadBytes, err := readFile(reqData.PostFile)
-		if err != nil {
-			log.Fatal(err)
-		}
-		payload = bytes.NewBuffer(payloadBytes)
-	}
-	req, err := http.NewRequest(reqData.Method, reqData.URL, payload)
-	if err != nil {
-		log.Printf("NewRequest: %v", err)
-	}
-
-	var start, connect, dnsStart, tlsHandshake time.Time
-	var firstByteTime, connectTime, dnsQueryTime, tlsHandshakeTime, totalTime time.Duration
-
-	reqTrack := RequestTracker{}
-	trace := &httptrace.ClientTrace{
-		// Measure DNS lookup time
-		DNSStart: func(dsi httptrace.DNSStartInfo) { dnsStart = time.Now() },
-		DNSDone: func(ddi httptrace.DNSDoneInfo) {
-			dnsQueryTime = time.Since(dnsStart)
-			reqTrack.dnsQueryTime = float64(dnsQueryTime / time.Microsecond)
-		},
-
-		// Measure TLS Handshake time
-		TLSHandshakeStart: func() { tlsHandshake = time.Now() },
-		TLSHandshakeDone: func(cs tls.ConnectionState, err error) {
-			tlsHandshakeTime = time.Since(tlsHandshake)
-			reqTrack.tlsHandshakeTime = float64(tlsHandshakeTime / time.Microsecond)
-		},
-
-		// Measure Connect time to server
-		ConnectStart: func(network, addr string) { connect = time.Now() },
-		ConnectDone: func(network, addr string, err error) {
-			connectTime = time.Since(connect)
-			reqTrack.connectTime = float64(connectTime / time.Microsecond)
-		},
-
-		// Measure time to get the first byte
-		GotFirstResponseByte: func() {
-			firstByteTime = time.Since(start)
-			reqTrack.firstByteTime = float64(firstByteTime / time.Microsecond)
-		},
-
-		GotConn: func(info httptrace.GotConnInfo) {
-			// fmt.Printf("Connection reused: %v\n", info.Reused)
-		},
-	}
-
-	// New request
-	req = req.WithContext(httptrace.WithClientTrace(req.Context(), trace))
-
-	// Add cookies
-	for _, cookie := range reqData.Cookies {
-		req.AddCookie(&cookie)
-	}
-
-	// Start the request
-	start = time.Now()
-	if _, err := client.RoundTrip(req); err != nil {
-		log.Println(err)
-	}
-	totalTime = time.Since(start)
-	reqTrack.totalTime = float64(totalTime / time.Microsecond)
-
-	mu.Lock()
-	defer mu.Unlock()
-	*reqsTracker = append(*reqsTracker, reqTrack)
-
+func requestWait(client http.RoundTripper, reqData RequestData, done chan bool) {
+	request(client, reqData)
 	done <- true
 }
 
-func requestRoutine(client http.RoundTripper, reqData RequestData) {
+func request(client http.RoundTripper, reqData RequestData) {
 	payload := &bytes.Buffer{}
 	if reqData.Method == "POST" {
 		payloadBytes, err := readFile(reqData.PostFile)
