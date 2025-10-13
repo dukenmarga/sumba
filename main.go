@@ -89,12 +89,12 @@ func main() {
 				browser := rod.New().MustConnect()
 				defer browser.MustClose()
 
-				go sendRequestsHeadless(ctx, browser, url, i, &workers)
+				go sendRequestsHeadless(ctx, browser, url, &workers)
 			} else {
 				// Unique http client will be used and reused for 1 routine
 				client := NewHTTPClient(*skipTLS, *E)
 				// This go routine will start sending requests sequentially one after each request is completed
-				go sendRequests(ctx, client, i, reqData, &workers)
+				go sendRequests(ctx, client, reqData, &workers)
 			}
 
 		}
@@ -264,9 +264,9 @@ func parseCookie(C string) []http.Cookie {
 
 // Tell the client to send request sequentially until maxRequests is reached
 // Each client will not depend on each other and has its own request timeline.
-func sendRequests(_ctx context.Context,
+func sendRequests(
+	_ctx context.Context,
 	client *http.Client,
-	workerNumber int64,
 	reqData RequestData,
 	wg *sync.WaitGroup) {
 
@@ -392,7 +392,6 @@ func sendRequestsHeadless(
 	_ctx context.Context,
 	browser *rod.Browser,
 	url *string,
-	workerNumber int64,
 	wg *sync.WaitGroup) {
 
 	// done is to indicate that a request has got response
