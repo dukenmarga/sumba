@@ -115,7 +115,12 @@ func main() {
 	// - Workers (default: 100) will pick up request from the channel and send it
 	if *stress {
 		// rps is the number of requests per second, initial value is 10
-		rps := 10
+		rps := 5
+
+		// max request per second, default is 300 for stress test
+		if maxRequests == 0 {
+			maxRequests = 300
+		}
 
 		// Holds the request queue
 		reqQueue := make(chan struct{})
@@ -140,10 +145,10 @@ func main() {
 		wg.Add(1)
 		go func() {
 			for range ticker.C {
-				rps += 25
+				rps += 15
 				fmt.Printf("Sending requests at\t%d RPS\n", rps)
 				interval.Reset(time.Duration(1000000/rps) * time.Microsecond)
-				if rps >= 200 {
+				if rps >= int(maxRequests) {
 					cancelTicker()
 					break
 				}
