@@ -99,7 +99,7 @@ func main() {
 
 		}
 		workers.Wait()
-		AverageFirstByteTime(reqsTracker)
+		AverageConnectTime(reqsTracker)
 		AverageTotalTime(reqsTracker)
 		RequestPerSecond(reqsTracker, maxRequests)
 
@@ -308,41 +308,33 @@ func request(client *http.Client, reqData RequestData) {
 		log.Printf("NewRequest: %v", err)
 	}
 
-	var start, connect, dnsStart, tlsHandshake time.Time
-	var firstByteTime, connectTime, dnsQueryTime, tlsHandshakeTime, totalTime time.Duration
+	var start, connectStart, connectDone, dnsStart, dnsDone time.Time
+	var gotConn, gotFirstResponseByte, tlsHandshakeStart, tlsHandshakeDone time.Time
 
 	reqTrack := RequestTracker{}
 	trace := &httptrace.ClientTrace{
 		// Measure DNS lookup time
 		DNSStart: func(dsi httptrace.DNSStartInfo) { dnsStart = time.Now() },
-		DNSDone: func(ddi httptrace.DNSDoneInfo) {
-			dnsQueryTime = time.Since(dnsStart)
-			reqTrack.dnsQueryTime = float64(dnsQueryTime / time.Microsecond)
-		},
-
-		// Measure TLS Handshake time
-		TLSHandshakeStart: func() { tlsHandshake = time.Now() },
-		TLSHandshakeDone: func(cs tls.ConnectionState, err error) {
-			tlsHandshakeTime = time.Since(tlsHandshake)
-			reqTrack.tlsHandshakeTime = float64(tlsHandshakeTime / time.Microsecond)
-		},
+		DNSDone:  func(ddi httptrace.DNSDoneInfo) { dnsDone = time.Now() },
 
 		// Measure Connect time to server
-		ConnectStart: func(network, addr string) { connect = time.Now() },
+		ConnectStart: func(network, addr string) { connectStart = time.Now() },
 		ConnectDone: func(network, addr string, err error) {
-			connectTime = time.Since(connect)
-			reqTrack.connectTime = float64(connectTime / time.Microsecond)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Connect error: %v\n", err)
+			}
+			connectDone = time.Now()
 		},
+
+		// Measure time to get connection
+		GotConn: func(info httptrace.GotConnInfo) { gotConn = time.Now() },
 
 		// Measure time to get the first byte
-		GotFirstResponseByte: func() {
-			firstByteTime = time.Since(start)
-			reqTrack.firstByteTime = float64(firstByteTime / time.Microsecond)
-		},
+		GotFirstResponseByte: func() { gotFirstResponseByte = time.Now() },
 
-		GotConn: func(info httptrace.GotConnInfo) {
-			// fmt.Printf("Connection reused: %v\n", info.Reused)
-		},
+		// Measure TLS Handshake time
+		TLSHandshakeStart: func() { tlsHandshakeStart = time.Now() },
+		TLSHandshakeDone:  func(cs tls.ConnectionState, err error) { tlsHandshakeDone = time.Now() },
 	}
 
 	// New request
@@ -355,12 +347,51 @@ func request(client *http.Client, reqData RequestData) {
 
 	// Start the request
 	start = time.Now()
-	if _, err := client.Do(req); err != nil {
+	resp, err := client.Do(req)
+	if err != nil {
 		log.Println(err)
 	}
-	totalTime = time.Since(start)
-	reqTrack.totalTime = float64(totalTime / time.Microsecond)
+	defer resp.Body.Close()
+
+	// Read the body
+	_, err = io.ReadAll(resp.Body)
+	if err != nil {
+		log.Println(err)
+	}
+	readBodyTime := time.Now()
+
+	// DNS Query time
+	reqTrack.dnsQueryTime = float64(dnsDone.Sub(dnsStart) / time.Microsecond)
+
+	// TCP connection time
+	reqTrack.tcpConnectTime = float64(connectDone.Sub(connectStart) / time.Microsecond)
+
+	// TLS Handshake time
+	reqTrack.tlsHandshakeTime = float64(tlsHandshakeDone.Sub(tlsHandshakeStart) / time.Microsecond)
+
+	// Server processing time
+	reqTrack.serverProcessingTime = float64(gotFirstResponseByte.Sub(gotConn) / time.Microsecond)
+
+	// Content transfer
+	reqTrack.contentTransferTime = float64(readBodyTime.Sub(gotFirstResponseByte) / time.Microsecond)
+
+	// Total time to name lookup
+	reqTrack.nameLookupTime = float64(dnsDone.Sub(start) / time.Microsecond)
+
+	// Total time to connect
+	reqTrack.connectTime = float64(connectDone.Sub(start) / time.Microsecond)
+
+	// Total time to pretransfer
+	reqTrack.pretransferTime = float64(gotConn.Sub(start) / time.Microsecond)
+
+	// Total time to start transfer
+	reqTrack.startTransferTime = float64(gotFirstResponseByte.Sub(start) / time.Microsecond)
+
+	// Total time from start to finish reading body
+	reqTrack.totalTime = float64(readBodyTime.Sub(start) / time.Microsecond)
+
 	reqTrack.rps = reqData.RPS
+	reqTrack.statusCode = resp.StatusCode
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -464,13 +495,19 @@ func (c *ChannelCounter) Read() uint64 {
 }
 
 type RequestTracker struct {
-	ch               chan func()
-	dnsQueryTime     float64
-	connectTime      float64
-	tlsHandshakeTime float64
-	firstByteTime    float64
-	totalTime        float64
-	rps              int
+	ch                   chan func()
+	dnsQueryTime         float64
+	tcpConnectTime       float64
+	tlsHandshakeTime     float64
+	serverProcessingTime float64
+	contentTransferTime  float64
+	nameLookupTime       float64
+	connectTime          float64
+	pretransferTime      float64
+	startTransferTime    float64
+	totalTime            float64
+	rps                  int
+	statusCode           int
 }
 
 // Initialise the request tracker
@@ -480,12 +517,12 @@ func NewRequestTracker() *[]RequestTracker {
 }
 
 // Compute average first byte time
-func AverageFirstByteTime(r *[]RequestTracker) float64 {
-	sum := SumFirstByteTime(r)
+func AverageConnectTime(r *[]RequestTracker) float64 {
+	sum := SumConnectTime(r)
 	average := sum / float64(len(*r))
 
 	averageFormatted, unit := formatDurationUnit(average)
-	fmt.Printf("Average first byte time\t\t%4.0f %s\n", averageFormatted, unit)
+	fmt.Printf("Average connect time\t\t%4.0f %s\n", averageFormatted, unit)
 
 	return average
 }
@@ -502,10 +539,10 @@ func AverageTotalTime(r *[]RequestTracker) float64 {
 }
 
 // Sum up the first byte time for all requests from all workers in microsecond
-func SumFirstByteTime(r *[]RequestTracker) float64 {
+func SumConnectTime(r *[]RequestTracker) float64 {
 	sum := 0.0
 	for _, reqTrack := range *r {
-		sum += reqTrack.firstByteTime
+		sum += reqTrack.connectTime
 	}
 	return sum
 }
@@ -536,7 +573,7 @@ func RequestPerSecond(r *[]RequestTracker, maxRequests uint64) float64 {
 // Calculates server benchmark as request per second
 func RequestPerSecondStress(r *[]RequestTracker, maxRequests uint64) float64 {
 	for _, reqTrack := range *r {
-		fmt.Printf("%v;%v\n", reqTrack.firstByteTime, reqTrack.totalTime)
+		fmt.Printf("%v;%v\n", reqTrack.connectTime, reqTrack.totalTime)
 	}
 	return 0
 }
