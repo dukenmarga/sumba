@@ -225,7 +225,8 @@ func main() {
 func NewHTTPClient(skipTLS bool, certificateFile string) *http.Client {
 	client := &http.Client{
 		Transport: &http.Transport{
-			Proxy: http.ProxyFromEnvironment,
+			DisableKeepAlives: true,
+			Proxy:             http.ProxyFromEnvironment,
 			TLSClientConfig: &tls.Config{
 				InsecureSkipVerify: skipTLS,
 			},
