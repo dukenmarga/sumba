@@ -329,7 +329,7 @@ func request(client *http.Client, reqData RequestData) {
 		log.Printf("NewRequest: %v", err)
 	}
 
-	var start, connectStart, connectDone, dnsStart, dnsDone time.Time
+	var connectStart, connectDone, dnsStart, dnsDone time.Time
 	var gotConn, gotFirstResponseByte, tlsHandshakeStart, tlsHandshakeDone time.Time
 
 	reqTrack := RequestTracker{}
@@ -367,7 +367,6 @@ func request(client *http.Client, reqData RequestData) {
 	}
 
 	// Start the request
-	start = time.Now()
 	resp, err := client.Do(req)
 	if err != nil {
 		log.Println(err)
@@ -379,7 +378,7 @@ func request(client *http.Client, reqData RequestData) {
 	if err != nil {
 		log.Println(err)
 	}
-	readBodyTime := time.Now()
+	readBodyDone := time.Now()
 
 	// DNS Query time
 	reqTrack.dnsQueryTime = float64(dnsDone.Sub(dnsStart) / time.Microsecond)
@@ -394,22 +393,22 @@ func request(client *http.Client, reqData RequestData) {
 	reqTrack.serverProcessingTime = float64(gotFirstResponseByte.Sub(gotConn) / time.Microsecond)
 
 	// Content transfer
-	reqTrack.contentTransferTime = float64(readBodyTime.Sub(gotFirstResponseByte) / time.Microsecond)
+	reqTrack.contentTransferTime = float64(readBodyDone.Sub(gotFirstResponseByte) / time.Microsecond)
 
 	// Total time to name lookup
-	reqTrack.nameLookupTime = float64(dnsDone.Sub(start) / time.Microsecond)
+	reqTrack.nameLookupTime = float64(dnsDone.Sub(dnsStart) / time.Microsecond)
 
 	// Total time to connect
-	reqTrack.connectTime = float64(connectDone.Sub(start) / time.Microsecond)
+	reqTrack.connectTime = float64(connectDone.Sub(dnsStart) / time.Microsecond)
 
 	// Total time to pretransfer
-	reqTrack.pretransferTime = float64(gotConn.Sub(start) / time.Microsecond)
+	reqTrack.pretransferTime = float64(gotConn.Sub(dnsStart) / time.Microsecond)
 
 	// Total time to start transfer
-	reqTrack.startTransferTime = float64(gotFirstResponseByte.Sub(start) / time.Microsecond)
+	reqTrack.startTransferTime = float64(gotFirstResponseByte.Sub(dnsStart) / time.Microsecond)
 
 	// Total time from start to finish reading body
-	reqTrack.totalTime = float64(readBodyTime.Sub(start) / time.Microsecond)
+	reqTrack.totalTime = float64(readBodyDone.Sub(dnsStart) / time.Microsecond)
 
 	reqTrack.rps = reqData.RPS
 	reqTrack.statusCode = resp.StatusCode
