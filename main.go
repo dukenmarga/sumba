@@ -66,6 +66,12 @@ func main() {
 
 	ctx := context.Background()
 
+	// Test connection
+	err := testConnection()
+	if err != nil {
+		return
+	}
+
 	// Request Data
 	reqData := RequestData{
 		URL:      *url,
@@ -315,7 +321,7 @@ func requestWait(client *http.Client, reqData RequestData, done chan bool) {
 	done <- true
 }
 
-func request(client *http.Client, reqData RequestData) {
+func request(client *http.Client, reqData RequestData) error {
 	payload := &bytes.Buffer{}
 	if reqData.Method == "POST" {
 		payloadBytes, err := readFile(reqData.PostFile)
@@ -369,7 +375,7 @@ func request(client *http.Client, reqData RequestData) {
 	// Start the request
 	resp, err := client.Do(req)
 	if err != nil {
-		log.Println(err)
+		return err
 	}
 	defer resp.Body.Close()
 
@@ -416,6 +422,8 @@ func request(client *http.Client, reqData RequestData) {
 	mu.Lock()
 	defer mu.Unlock()
 	*reqsTracker = append(*reqsTracker, reqTrack)
+
+	return nil
 
 }
 
@@ -626,4 +634,16 @@ func formatDurationUnit(t float64) (float64, string) {
 		return t / 1000000, "s"
 	}
 	return t, "μs"
+}
+
+func testConnection() error {
+	// Test a connection and check if it is successful
+	client := NewHTTPClient(*skipTLS, *E)
+	err := request(client, RequestData{URL: *url, Method: "HEAD"})
+	if err != nil && strings.Contains(err.Error(), "tls: failed to verify certificate") {
+		fmt.Fprintf(os.Stderr, "TLS error occurred. If you want to skip TLS verification, use -skipTLS flag\n")
+		return err
+	}
+
+	return nil
 }
