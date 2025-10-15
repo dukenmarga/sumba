@@ -223,16 +223,11 @@ func main() {
 }
 
 func NewHTTPClient(skipTLS bool, certificateFile string) *http.Client {
-	caCertPool := x509.NewCertPool()
-	if certificateFile != "" {
-		caCertPool = readCertificate(certificateFile)
-	}
-	return &http.Client{
+	client := &http.Client{
 		Transport: &http.Transport{
 			Proxy: http.ProxyFromEnvironment,
 			TLSClientConfig: &tls.Config{
 				InsecureSkipVerify: skipTLS,
-				RootCAs:            caCertPool,
 			},
 			ForceAttemptHTTP2:     true,
 			MaxIdleConns:          100,
@@ -242,6 +237,13 @@ func NewHTTPClient(skipTLS bool, certificateFile string) *http.Client {
 		},
 		Timeout: 10 * time.Second,
 	}
+	if certificateFile != "" {
+		caCertPool := x509.NewCertPool()
+		caCertPool = readCertificate(certificateFile)
+		client.Transport.(*http.Transport).TLSClientConfig.RootCAs = caCertPool
+	}
+
+	return client
 }
 
 func showInitialInfo() {
