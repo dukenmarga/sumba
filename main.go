@@ -61,11 +61,8 @@ func init() {
 func main() {
 	flag.Parse()
 	maxRequests = uint64(*n)
-	fmt.Println("Sumba - Simple Server Benchmark Tool")
-	fmt.Printf("====================================\n\n")
-	fmt.Printf("Target\t%v\n", *url)
-	fmt.Printf("Total requests\t\t\t%4.0d\n", maxRequests)
-	fmt.Printf("Worker used\t\t\t%4.0d\n", *c)
+
+	showInitialInfo()
 
 	ctx := context.Background()
 
@@ -245,6 +242,12 @@ func NewHTTPClient(skipTLS bool, certificateFile string) *http.Client {
 		},
 		Timeout: 10 * time.Second,
 	}
+}
+
+func showInitialInfo() {
+	fmt.Println("Sumba - Simple Server Benchmark Tool")
+	fmt.Printf("====================================\n\n")
+	fmt.Printf("Target\t%v\n", *url)
 }
 
 // Read the self-signed certificate, e.g localhost.crt
