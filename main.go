@@ -22,7 +22,6 @@ import (
 var (
 	n           *int64
 	c           *int64
-	emulate     *bool
 	maxRequests uint64
 
 	C       *string
@@ -30,9 +29,10 @@ var (
 	m       *string
 	p       *string
 	E       *string
-	classic *bool
-	stress  *bool
 	skipTLS *bool
+	classic *bool
+	emulate *bool
+	stress  *bool
 
 	mu sync.Mutex
 
@@ -46,15 +46,16 @@ var (
 func init() {
 	n = flag.Int64("n", 0, "number of requests to perform")
 	c = flag.Int64("c", 1, "number of concurrent workers")
-	emulate = flag.Bool("emulate", false, "emulate headless browser")
 	url = flag.String("url", "http://127.0.0.1", "URL string")
 	C = flag.String("C", "", "cookie in the form of \"key1=value1;key2=value2\"")
 	m = flag.String("m", "GET", "HTTP method: GET (default), POST (set -p for POST-file)")
 	p = flag.String("p", "", "POST-file, containing payload for POST method. Use -T to define type")
 	E = flag.String("E", "", "certificate file")
-	classic = flag.Bool("classic", false, "classic benchmark")
-	stress = flag.Bool("stress", false, "stress test")
 	skipTLS = flag.Bool("skipTLS", false, "skip TLS verification")
+
+	classic = flag.Bool("classic", false, "classic benchmark")
+	emulate = flag.Bool("emulate", false, "emulate headless browser")
+	stress = flag.Bool("stress", false, "stress test")
 }
 
 func main() {
@@ -82,20 +83,34 @@ func main() {
 		// Monitor each routine and wait them until desired number of requests is reached
 		workers := sync.WaitGroup{}
 		for i := int64(0); i < *c; i++ {
+			// Unique http client will be used and reused for 1 routine
+			client := NewHTTPClient(*skipTLS, *E)
+
+			// This go routine will start sending requests sequentially one after each request is completed
 			workers.Add(1)
+			go sendRequests(ctx, client, reqData, &workers)
 
-			if *emulate {
-				// Launch headless browser
-				browser := rod.New().MustConnect()
-				defer browser.MustClose()
+		}
+		workers.Wait()
+		AverageConnectTime(reqsTracker)
+		AverageTotalTime(reqsTracker)
+		RequestPerSecond(reqsTracker, maxRequests)
 
-				go sendRequestsHeadless(ctx, browser, url, &workers)
-			} else {
-				// Unique http client will be used and reused for 1 routine
-				client := NewHTTPClient(*skipTLS, *E)
-				// This go routine will start sending requests sequentially one after each request is completed
-				go sendRequests(ctx, client, reqData, &workers)
-			}
+		return
+	}
+
+	// Emulate headless browser to benchmark:
+	// Send n requests from c workers concurrently
+	if *emulate {
+		// Monitor each routine and wait them until desired number of requests is reached
+		workers := sync.WaitGroup{}
+		for i := int64(0); i < *c; i++ {
+			// Launch headless browser
+			browser := rod.New().MustConnect()
+			defer browser.MustClose()
+
+			workers.Add(1)
+			go sendRequestsHeadless(ctx, browser, url, &workers)
 
 		}
 		workers.Wait()
