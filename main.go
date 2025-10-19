@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/tls"
@@ -224,7 +225,7 @@ func main() {
 		}()
 
 		wg.Wait()
-		RequestPerSecondStress(reqsTracker, maxRequests)
+		GenerateOutput(reqsTracker, maxRequests)
 	}
 }
 
@@ -606,12 +607,38 @@ func RequestPerSecond(r *[]RequestTracker, maxRequests uint64) float64 {
 	return rps
 }
 
-// RequestPerSecondStress streams raw timing data for stress visualization and currently returns zero.
-func RequestPerSecondStress(r *[]RequestTracker, maxRequests uint64) float64 {
-	for _, reqTrack := range *r {
-		fmt.Printf("%v;%v\n", reqTrack.connectTime, reqTrack.totalTime)
+// GenerateOutput writes raw timing data to output.csv for later visualization.
+func GenerateOutput(r *[]RequestTracker, maxRequests uint64) {
+	file, err := os.Create("output.csv")
+	if err != nil {
+		log.Printf("failed to create output.csv: %v", err)
+		return
 	}
-	return 0
+	defer file.Close()
+
+	writer := bufio.NewWriter(file)
+	if _, err := writer.WriteString("Name Lookup;Connect;Pretransfer;Start Transfer;Reading Body;Status\n"); err != nil {
+		log.Printf("failed to write header: %v", err)
+		return
+	}
+
+	for _, reqTrack := range *r {
+		if _, err := fmt.Fprintf(writer, "%v;%v;%v;%v;%v;%v\n",
+			reqTrack.nameLookupTime/1_000_000, reqTrack.connectTime/1_000_000,
+			reqTrack.pretransferTime/1_000_000, reqTrack.startTransferTime/1_000_000,
+			reqTrack.totalTime/1_000_000, reqTrack.statusCode,
+		); err != nil {
+			log.Printf("failed to write row: %v", err)
+			return
+		}
+	}
+
+	if err := writer.Flush(); err != nil {
+		log.Printf("failed to flush output.csv: %v", err)
+	}
+
+	fmt.Printf("Generating results to: output.csv\n")
+
 }
 
 // readFile returns the contents of the provided path, validating that it is non-empty and readable.
