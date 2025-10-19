@@ -30,6 +30,7 @@ var (
 	m       *string
 	p       *string
 	E       *string
+	U       *string
 	skipTLS *bool
 	classic *bool
 	emulate *bool
@@ -52,6 +53,7 @@ func init() {
 	m = flag.String("m", "GET", "HTTP method: GET (default), POST (set -p for POST-file)")
 	p = flag.String("p", "", "POST-file, containing payload for POST method. Use -T to define type")
 	E = flag.String("E", "", "certificate file")
+	U = flag.String("U", "", "user agent")
 	skipTLS = flag.Bool("skipTLS", false, "skip TLS verification")
 
 	classic = flag.Bool("classic", false, "classic benchmark")
@@ -75,10 +77,11 @@ func main() {
 
 	// Request Data
 	reqData := RequestData{
-		URL:      *url,
-		Method:   *m,
-		Cookies:  parseCookie(*C),
-		PostFile: *p,
+		URL:       *url,
+		Method:    *m,
+		Cookies:   parseCookie(*C),
+		PostFile:  *p,
+		UserAgent: *U,
 	}
 
 	// Classic benchmark:
@@ -377,6 +380,9 @@ func request(client *http.Client, reqData RequestData) error {
 		req.AddCookie(&cookie)
 	}
 
+	// Add user agent
+	req.Header.Set("User-Agent", reqData.UserAgent)
+
 	// Start the request
 	resp, err := client.Do(req)
 	if err != nil {
@@ -478,11 +484,12 @@ func sendRequestsHeadless(
 
 // RequestData captures the parameters needed to build an HTTP request during benchmarking.
 type RequestData struct {
-	URL      string
-	Method   string
-	PostFile string
-	RPS      int
-	Cookies  []http.Cookie
+	URL       string
+	Method    string
+	PostFile  string
+	RPS       int
+	Cookies   []http.Cookie
+	UserAgent string
 }
 
 // ChannelCounter serializes access to a counter via a dedicated goroutine.
