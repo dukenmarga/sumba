@@ -384,8 +384,10 @@ func request(client *http.Client, reqData RequestData) error {
 	req.Header.Set("User-Agent", reqData.UserAgent)
 
 	// Start the request
+	fmt.Printf(".")
 	resp, err := client.Do(req)
 	if err != nil {
+		fmt.Fprint(os.Stderr, "Do err: ", err)
 		return err
 	}
 	defer resp.Body.Close()
@@ -605,11 +607,11 @@ func RequestPerSecond(r *[]RequestTracker, maxRequests uint64) float64 {
 	sum := SumTotalTime(r)
 	// Request per second = total request / total time
 	// Total time is in microseconds
-	rps := float64(maxRequests) / sum * 1000000
+	rps := float64(maxRequests) * 1000000 / sum
 	if rps < 0 {
 		fmt.Printf("Request per second\t\t%4.3f req/s\n", rps)
 	} else {
-		fmt.Printf("Request per second\t\t%4.0f req/s\n", rps)
+		fmt.Printf("Request per second\t\t%4.1f req/s\n", rps)
 	}
 	return rps
 }
