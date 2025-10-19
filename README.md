@@ -29,45 +29,78 @@ If you prefer pre-compiled binary, you can download it in [Releases page](https:
 - Windows x86_64
 - FreeBSD x86_64
 
+### Mode
+There are 3 modes you can choose:
+- Classic test: send a number of request to an HTTP server
+- Emulate: use headless browser to test (download all resources: JS, img, etc.), still under development
+- Stess test (benchmark): send incrementally number of request to server, please use with caution
+
 ### How to use
+
+
 
 * This will send total 100 requests, but will be sent concurrently using 10 workers (can be seen as client):
     ```bash
-    $ ./sumba -n 100 -c 10 -url http://localhost
+    $ ./sumba -classic -n 100 -c 10 -url http://localhost -skipTLS
     ```
 
 * If you want to send request sequentially (which will not reflect the real performance), use this:
     ```bash
-    $ ./sumba -n 100 -c 1 -url http://localhost
+    $ ./sumba -classic -n 100 -c 1 -url https://
     ```
 
 * If you want to emulate to test a URL using headless browser (open a page and download all its resources such as CSS, JS, etc), use this:
     ```bash
-    $ ./sumba -n 100 -c 1 -url http://localhost -emulate true
+    $ ./sumba -emulate -n 100 -c 1 -url http://localhost
     ```
 
 
 * Example with the results
     ```bash
-    ./sumba -n 100 -c 3 -url https://google.com
+    ./sumba -classic -n 100 -c 3 -url https://google.com
     Test 100 requests using 3 workers to: https://google.com
     Average first byte time         78.8 ms
     Average time per request        78.9 ms
     Request per second                13 req/s
     ```
 
+* Stress benchmark. This command below will start 15 req/s initially and will increase by 15 every second until maximum 100 req/s is exceeded.
+The result is generated to `output.csv` that you can inspect. You can use and run `chart.py` to make a chart automatically from this CSV.
+    ```bash
+    $ ./sumba -stress -n 100 -url http://localhost -skipTLS
+
+    $ python3 -m venv venv
+    $ source venv/bin/activate
+    $ pip install -r requirements.txt
+    $ python3 chart.py
+    ```
+
+    ![Benchmark example 1](resources/benchmark-1.png "Benchmark 1")
+    ![Benchmark example 2](resources/benchmark-2.png "Benchmark 2")
+
+
 ### Options
 
 ```
+-classic Classic test
+-emulate Emulate headless browser to test
+-stress Stress test (benchmark)
 -C "key1=value1; key2=value2"
     Add cookie to the request in the form of "key1=value1; key2=value2"
+-E Certificate file
 -m Method: GET, POST
     Request method, GET is default. If POST, use -p to define file containing the payload
 -p POST-file
     File containing payload for POST method
+-skipTLS skip checking TLS, helpful when testing localhost
+-url URL to test
+-U User-agent
 ```
 
 ### How it works
+
+#### Classic Test
+
 The app will send requests to target URL until it reaches value defined by parameter `n`
 and use `c` number of workers (clients) to finish all requests.
 
@@ -89,3 +122,7 @@ total time = req (1) + req (2) + ... + req (n)
 
 rps = total time / n
 ```
+
+#### Stress Test
+
+Todo
