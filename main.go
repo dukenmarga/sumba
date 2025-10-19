@@ -228,6 +228,7 @@ func main() {
 	}
 }
 
+// NewHTTPClient constructs an HTTP client with configurable TLS handling and conservative transport defaults.
 func NewHTTPClient(skipTLS bool, certificateFile string) *http.Client {
 	client := &http.Client{
 		Transport: &http.Transport{
@@ -253,13 +254,14 @@ func NewHTTPClient(skipTLS bool, certificateFile string) *http.Client {
 	return client
 }
 
+// showInitialInfo prints a banner describing the benchmark target.
 func showInitialInfo() {
 	fmt.Println("Sumba - Simple Server Benchmark Tool")
 	fmt.Printf("====================================\n\n")
 	fmt.Printf("Target\t%v\n", *url)
 }
 
-// Read the self-signed certificate, e.g localhost.crt
+// readCertificate loads a PEM-encoded certificate file and returns a cert pool containing it.
 func readCertificate(path string) *x509.CertPool {
 	// Load the self-signed certificate
 	caCert, err := os.ReadFile(path)
@@ -272,6 +274,8 @@ func readCertificate(path string) *x509.CertPool {
 	return caCertPool
 }
 
+// parseCookie converts a semicolon-separated cookie string into individual http.Cookie entries.
+// Invalid pairs are skipped and surrounding whitespace is trimmed.
 func parseCookie(C string) []http.Cookie {
 	httpCookie := []http.Cookie{}
 
@@ -289,8 +293,8 @@ func parseCookie(C string) []http.Cookie {
 	return httpCookie
 }
 
-// Tell the client to send request sequentially until maxRequests is reached
-// Each client will not depend on each other and has its own request timeline.
+// sendRequests instructs a worker to issue sequential HTTP requests until the shared maxRequests limit is reached.
+// Each worker maintains its own pacing but coordinates through reqCounter to avoid overshooting.
 func sendRequests(
 	_ctx context.Context,
 	client *http.Client,
@@ -314,13 +318,13 @@ func sendRequests(
 	}
 }
 
-// Send a http request to specified url using a specified client and trace
-// the request time
+// requestWait sends a request and notifies the provided channel once the response has been processed.
 func requestWait(client *http.Client, reqData RequestData, done chan bool) {
 	request(client, reqData)
 	done <- true
 }
 
+// request performs the HTTP call and records detailed timing metrics for aggregation.
 func request(client *http.Client, reqData RequestData) error {
 	payload := &bytes.Buffer{}
 	if reqData.Method == "POST" {
@@ -427,6 +431,7 @@ func request(client *http.Client, reqData RequestData) error {
 
 }
 
+// requestHeadless loads the target URL with a shared headless browser and records the navigation time.
 func requestHeadless(browser *rod.Browser, url *string, done chan bool) {
 	var start time.Time
 	var totalTime time.Duration
@@ -445,8 +450,8 @@ func requestHeadless(browser *rod.Browser, url *string, done chan bool) {
 	done <- true
 }
 
-// Send request sequentially using headless browser until maxRequests is reached.
-// Each client will not depend on each other and has its own request timeline.
+// sendRequestsHeadless schedules headless browser visits until the shared maxRequests limit is reached.
+// Each worker reuses the shared browser instance but relies on reqCounter for coordination.
 func sendRequestsHeadless(
 	_ctx context.Context,
 	browser *rod.Browser,
@@ -470,6 +475,7 @@ func sendRequestsHeadless(
 	}
 }
 
+// RequestData captures the parameters needed to build an HTTP request during benchmarking.
 type RequestData struct {
 	URL      string
 	Method   string
@@ -478,12 +484,13 @@ type RequestData struct {
 	Cookies  []http.Cookie
 }
 
+// ChannelCounter serializes access to a counter via a dedicated goroutine.
 type ChannelCounter struct {
 	ch     chan func()
 	number uint64
 }
 
-// Initialise the channel counter
+// NewCounterChannel creates a ChannelCounter initialized with the provided starting value.
 func NewCounterChannel(start uint64) *ChannelCounter {
 	// Number of maximum operations, e.g. calling Add or Read will be considered 1 operation
 	// Each worker that run sendRequest() will have 1 Add and 1 Read (total 2 operation), means
@@ -505,14 +512,14 @@ func NewCounterChannel(start uint64) *ChannelCounter {
 	return counter
 }
 
-// Add counter number
+// Add increases the counter by the supplied amount.
 func (c *ChannelCounter) Add(num uint64) {
 	c.ch <- func() {
 		c.number = c.number + num
 	}
 }
 
-// Read counter number
+// Read returns the current counter value.
 func (c *ChannelCounter) Read() uint64 {
 	ret := make(chan uint64)
 	c.ch <- func() {
@@ -522,6 +529,7 @@ func (c *ChannelCounter) Read() uint64 {
 	return <-ret
 }
 
+// RequestTracker stores timing metrics captured for a single HTTP request.
 type RequestTracker struct {
 	ch                   chan func()
 	dnsQueryTime         float64
@@ -538,13 +546,13 @@ type RequestTracker struct {
 	statusCode           int
 }
 
-// Initialise the request tracker
+// NewRequestTracker returns an empty slice ready to collect request metrics.
 func NewRequestTracker() *[]RequestTracker {
 	req := &[]RequestTracker{}
 	return req
 }
 
-// Compute average first byte time
+// AverageConnectTime prints and returns the average connect time across all tracked requests.
 func AverageConnectTime(r *[]RequestTracker) float64 {
 	sum := SumConnectTime(r)
 	average := sum / float64(len(*r))
@@ -555,7 +563,7 @@ func AverageConnectTime(r *[]RequestTracker) float64 {
 	return average
 }
 
-// Compute average request time
+// AverageTotalTime prints and returns the average total time across all tracked requests.
 func AverageTotalTime(r *[]RequestTracker) float64 {
 	sum := SumTotalTime(r)
 	average := sum / float64(len(*r))
@@ -566,7 +574,7 @@ func AverageTotalTime(r *[]RequestTracker) float64 {
 	return average
 }
 
-// Sum up the first byte time for all requests from all workers in microsecond
+// SumConnectTime sums the connect times (in microseconds) for every tracked request.
 func SumConnectTime(r *[]RequestTracker) float64 {
 	sum := 0.0
 	for _, reqTrack := range *r {
@@ -575,7 +583,7 @@ func SumConnectTime(r *[]RequestTracker) float64 {
 	return sum
 }
 
-// Sum up the total request time for all requests from all workers in microsecond
+// SumTotalTime sums the total times (in microseconds) for every tracked request.
 func SumTotalTime(r *[]RequestTracker) float64 {
 	sum := 0.0
 	for _, reqTrack := range *r {
@@ -584,7 +592,7 @@ func SumTotalTime(r *[]RequestTracker) float64 {
 	return sum
 }
 
-// Calculates server benchmark as request per second
+// RequestPerSecond calculates and prints the throughput using the recorded timings and declared request count.
 func RequestPerSecond(r *[]RequestTracker, maxRequests uint64) float64 {
 	sum := SumTotalTime(r)
 	// Request per second = total request / total time
@@ -598,7 +606,7 @@ func RequestPerSecond(r *[]RequestTracker, maxRequests uint64) float64 {
 	return rps
 }
 
-// Calculates server benchmark as request per second
+// RequestPerSecondStress streams raw timing data for stress visualization and currently returns zero.
 func RequestPerSecondStress(r *[]RequestTracker, maxRequests uint64) float64 {
 	for _, reqTrack := range *r {
 		fmt.Printf("%v;%v\n", reqTrack.connectTime, reqTrack.totalTime)
@@ -606,6 +614,7 @@ func RequestPerSecondStress(r *[]RequestTracker, maxRequests uint64) float64 {
 	return 0
 }
 
+// readFile returns the contents of the provided path, validating that it is non-empty and readable.
 func readFile(path string) ([]byte, error) {
 	if path == "" {
 		return nil, fmt.Errorf("empty file path")
@@ -624,8 +633,7 @@ func readFile(path string) ([]byte, error) {
 	return data, nil
 }
 
-// Format t (in microsecond) into readable duration format, depending on the value
-// e.g t=1234567 => t=1.234567 s or t=1234 => t=1.234 ms
+// formatDurationUnit scales a microsecond duration into a human-readable value and accompanying unit label.
 func formatDurationUnit(t float64) (float64, string) {
 	if t > 1000 && t < 1000000 {
 		return t / 1000, "ms"
@@ -636,6 +644,7 @@ func formatDurationUnit(t float64) (float64, string) {
 	return t, "μs"
 }
 
+// testConnection probes the target endpoint with a HEAD request to surface connectivity or TLS issues early.
 func testConnection() error {
 	// Test a connection and check if it is successful
 	client := NewHTTPClient(*skipTLS, *E)
